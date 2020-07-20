@@ -1,0 +1,111 @@
+# =============================================================================
+#                              LTS Configuration.
+# =============================================================================
+
+
+# LTS server name. Should be unique in a multi-node cluster.
+name = "lts-server"
+# Data directory
+data-dir = "data/lts-cluster"
+# Raw socket port dedicated for txn timestamp service
+txnts-service-url = "127.0.0.1:62389"
+# gRPC port
+client-urls = "http://127.0.0.1:62379"
+# if not set, use ${client-urls}
+advertise-client-urls = ""
+# ETCD peer communication port
+peer-urls = "http://127.0.0.1:62380"
+# if not set, use ${peer-urls}
+advertise-peer-urls = ""
+
+# Initial cluster member configuration
+# The cluster-mode format should be "{name}={peer-urls},{name}={peer-urls},{name}={peer-urls}"
+initial-cluster = "lts-server=http://127.0.0.1:62380"
+initial-cluster-state = "new"
+join = ""
+lease = 3
+leader-priority-check-interval = "1m"
+
+# Configure the maximum open files
+max-wal-files = 1000
+max-snapshot-files = 2000
+snapshot-count = 100000
+auto-compaction-retention = "100000"
+
+# If the keyspace's backend database for any member exceeds the space quota 8GB
+quota-backend-bytes = 8589934592
+
+[security]
+cacert-path = ""
+cert-path = ""
+key-path = ""
+
+[log]
+# debug | info | warn | error | fatal
+level = "debug"
+
+[log.file]
+filename = "logs/lts-cluster.log"
+# Maximum log file size in MB.
+max-size = 1024
+# Maximum log file keep days
+max-days = 30
+# Maximum number of old log files to retain
+max-backups = 7
+# If rotate log by day
+log-rotate = false
+
+[server]
+# Paths used to persist information in ETCD
+lts-root-path = "/lts-cluster"
+lts-cluster-meta-path = "/lts-cluster/meta"
+lts-cluster-id-path = "/lts-cluster/cluster_id"
+lts-timestamp-path = "/lts-cluster/ts"
+# HTTP api prefix
+lts-api-prefix = "/lts-cluster/api"
+# Update timestamp configurations
+update-timestamp-step  = "5s"
+update-timestamp-interval = "1s"
+update-timestamp-guard = "1s"
+
+resign-leader-timeout = "5s"
+next-leader-ttl = "10s"
+request-timeout = "10s"
+slow-request-time = "1s"
+throughput-collection-interval = "10s"
+
+[tcp]
+# TCP read/write buffer. Default is 128MB.
+tcp-read-buffer-size = 134217728
+tcp-write-buffer-size = 134217728
+tcp-set-no-delay = 0
+# Ring Buffer bucket count. Default is 2^20.
+tcp-ringbuf-capacity = 1048576
+tcp-ringbuf-batch-produce-limit = 1024
+tcp-read-timeout = "20s"
+tcp-write-timeout = "20s"
+# The header is normally used to record the length of the body.
+# Therefore, 2 bytes should be enough.
+tcp-max-header-length = 2
+
+[etcd]
+kv-range-limit = 10000
+etcd-timeout = "3s"
+kv-request-timeout = "10s"
+kv-slow-request-time = "1s"
+dial-timeout = "30s"
+max-txn-ops = 10000
+etcd-client-urls = "http://127.0.0.1:62379"
+etcd-peer-urls = "http://127.0.0.1:62380"
+# if not set, use ${etcd-client-urls} and ${etcd-peer-urls}
+etcd-advertise-client-urls = ""
+etcd-advertise-peer-urls = ""
+# maxCheckEtcdRunningCount = 60
+# checkEtcdRunningDelay    = "1s"
+
+# gRPC write and read buffer size. Changed default value to 128KB (from 32KB).
+read-buffer-size = 1310720
+write-buffer-size = 1310720
+initial-window-size = 0
+initial-conn-window-size = 0
+max-request-size = 10485760

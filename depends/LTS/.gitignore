@@ -1,0 +1,11 @@
+*.pyc
+*.swp
+*.tmp
+.idea
+*egg*
+*dist*
+*yml
+.DS_Store
+*lib
+vendor
+bin

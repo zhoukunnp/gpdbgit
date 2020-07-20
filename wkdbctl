@@ -1,0 +1,4329 @@
+#!/bin/bash
+
+set -e
+set -x
+
+gpbin=${GPBIN}
+gpcpbin=${GPBINHOME}
+gpcptmp=${GPCOMPILEHOME}
+gpdatap=${GPPRIMARYHOME}
+gpinit=${GPINIT}
+gpmaster=${GPMASTER}
+gpsrc=${GPSRC}
+gptmp=${GPCOMPILE}
+
+ltspath=${LTSPATH}
+hammerdbsrc="${gpsrc}/contrib/pgbench/HammerDB-3.1"
+hammerdbtest="${hammerdbsrc}/src/postgresql"
+
+# modify thread number value should also modify the next index value, tpcblastindex should be the last index of this array.
+numberoftpcbthread=(8 16 32 64 128 256 512)
+# numberoftpcbthread=(128)
+tpcblastindex=6
+let "tpcblastindex1=tpcblastindex-1"
+
+# modify thread number value should also modify the next index value, tpcclastindex should be the last index of this array (start with 0).
+numberoftpccthread=(8 16 32 64 128 256 512)
+# numberoftpccthread=(1)
+tpcclastindex=6
+let "tpcclastindex1=tpcclastindex-1"
+
+# modify thread number value should also modify the next index value, ycsblastindex should be the last index of this array (start with 0).
+numberofycsbthread=(8 16 32 64 128 256 512)
+# numberoftpccthread=(1)
+ycsblastindex=6
+let "ycsblastindex1=ycsblastindex-1"
+
+segment_list=(gp-seg1 gp-seg2)
+all_node_list=(gp-master gp-seg1 gp-seg2)
+
+crdb_node_num=3
+crdb_node_list=(gp-master gp-seg1 gp-seg2)
+leader_ip=9.39.242.133
+crdb_data_path="/data1/gptest/crdata"
+
+rootpwd="root2019"
+RESULT="/data1/gptest/result"
+curResult=${RESULT}
+SIZE_LIST=(10 100 1000)
+SIZE=100
+USERNAME="gptest"
+MASTER_IP=9.39.242.133
+PORT=35432
+SPORT=45432
+CPORT=26257
+CHPORT=8080
+DEFAULTDB='penguindb'
+NI="bond1"
+DN="nvme0n1"
+WORKERS=10
+YCSBPATH='/data1/gptest/ycsb-0.17.0'
+YCSB_RECORD_COUNT=10000000
+YCSB_OPERATION_COUNT=500000
+
+DATAHOME='/data1/gptest/penguindb/gpdata'
+ERROR(){
+	echo -e "\e[101m\e[97m[ERROR]\e[49m\e[39m "$@
+}
+
+INFO(){
+	echo -e "\e[104m\e[97m[INFO]\e[49m\e[39m "$@
+}
+
+WARNING(){
+	echo -e "\e[101m\e[97m[WARNING]\e[49m\e[39m "$@
+}
+
+while [[ $# -gt 0 ]]
+do
+	key="$1"
+
+	case ${key} in
+		-A|--test-all)
+			TEST_ALL=1
+			shift
+			;;
+		-a|--all-tests)
+			RUN_ALL_TESTS=1
+			shift
+			;;
+		-b|--enable-debug)
+			DEBUG=1
+			shift
+			shift
+			;;
+		-C|--test-tpcc)
+			TEST_TPCC=1
+			shift
+			;;
+		-c|--compile-only)
+			COMPILE=1
+			shift
+			shift
+			;;
+		-d|--deploy-cluster)
+			DEPLOY=1
+			shift
+			shift
+			;;
+		-f|--first)
+			FIRST=1
+			shift
+			shift
+			;;
+		-g|--test-gpdb)
+			TEST_GPDB=1
+			shift
+			;;
+		-P|--draw-picture)
+			# todo
+			# fit any number.
+			# tips:
+			# a=1
+			# command: eval 'let number${a}=2'
+			# can let number1=2
+			DRAW_PICTURE=1
+			testtype=$2
+			testnumber=$3
+			if [[ "$3" == "2" ]]
+			then
+				testname1=$4
+				testname2=$5
+				shift
+				shift
+				shift
+				shift
+				shift
+			elif [[ "$3" == "3" ]]
+			then
+				testname1=$4
+				testname2=$5
+				testname3=$6
+				shift
+				shift
+				shift
+				shift
+				shift
+				shift
+			else
+				ERROR "not support other number."
+				exit 1
+			fi
+			;;
+		-p|--port)
+			PORT=$2
+			shift
+			shift
+			;;
+		-R|--restart)
+			RESTART=1
+			shift
+			;;
+		-r|--result-path)
+			RESULT=$2
+			shift
+			shift
+			;;
+		-S|--test-select)
+			TEST_SELECT=1
+			shift
+			;;
+		-s|--size)
+			SIZE=$2
+			shift
+			shift
+			;;
+		-T|--test-tpcb)
+			TEST_TPCB=1
+			shift
+			;;
+		-t|--copy-tmp)
+			COPY_TMP=1
+			shift
+			shift
+			;;
+		-U|--test-update)
+			TEST_UPDATE=1
+			shift
+			;;
+		-u|--username)
+			USERNAME=$2
+			shift
+			shift
+			;;
+		-w|--workers)
+			WORKERS=$2
+			shift
+			shift
+			;;
+		-x|--at-ruc)
+			ATRUC=1
+			shift
+			;;
+		-Y|--test-ycsb)
+			TEST_YCSB=1
+			YCSB_TEST_TYPE=$2
+			shift
+			shift
+			;;
+		--cd)
+			DEPLOY_CRDB_CLUSTER=1
+			shift
+			;;
+		--con)
+			RUN_CON_TESTS=1
+			shift
+			;;
+		--con-build)
+			BUILD_CON_TESTS=1
+			shift
+			;;
+		--cr)
+			RESTART_CRDB_CLUSTER=1
+			shift
+			;;
+		--cw)
+			RUN_CW_TESTS=1
+			shift
+			;;
+		--cw-build)
+			BUILD_CW_TESTS=1
+			shift
+			;;
+		--database)
+			DEFAULTDB=$2
+			shift
+			shift
+			;;
+		--dn)
+			DN=$2
+			shift
+			shift
+			;;
+		--hr)
+			RUN_HR_TESTS=1
+			shift
+			;;
+		--hr-build)
+			BUILD_HR_TESTS=1
+			shift
+			;;
+		--ni)
+			NI=$2
+			shift
+			shift
+			;;
+		--occ)
+			RUN_OCC_TESTS=1
+			shift
+			;;
+		--occ-build)
+			BUILD_OCC_TESTS=1
+			shift
+			;;
+		--root-passwd)
+			rootpwd=$2
+			shift
+			shift
+			;;
+		--size-test)
+			SIZE_TEST=1
+			shift
+			;;
+		--set-ndelay)
+			SET_NDELAY=1
+			BASE_DELAY=$2
+			FLOAT_DELAY=$3
+			PROBE=$4
+			shift
+			shift
+			shift
+			shift
+			;;
+		--set-lts)
+			LTS_LOCALE=$2
+			LTS_IP=$(cat /etc/hosts | grep ${LTS_LOCALE} | grep -v "127.0.0.1" | grep -v "::1" | awk '{print $1}' | head -n 1)
+			if [[ ! "$LTS_IP" ]]
+			then
+				ERROR "Please specify lts node ip in /etc/hosts"
+				exit 1
+			fi
+			shift
+			shift
+			;;
+		--set-pgbench)
+			PGBENCH_LOCALE=$2
+			shift
+			shift
+			;;
+		--sp)
+			SPORT=$2
+			shift
+			shift
+			;;
+		--start-standby)
+			NEED_STANDBY=1
+			STANDBY_LOCALE=$2
+			shift
+			shift
+			;;
+		--ts)
+			TS=$2
+			shift
+			shift
+			;;
+		--unset-ndelay)
+			UNSET_NDELAY=1
+			shift
+			;;
+		*)
+			ERROR "Unknown option: "$1
+			exit 1
+			;;
+	esac
+done
+
+START_MONITOR(){
+	timestamp=$(date +"%m%d%H%M%S")
+	set +e
+	mkdir -p ${HOME}/tmp
+
+	echo "export TIMESTAMP=${timestamp}" > ${HOME}/tmp/timestamp
+	for node in ${all_node_list[@]}
+	do
+		ssh -f ${node} "while true; do top -bn1 | head -n 3 | tail -n 1 >> ${HOME}/tmp/$1_cpuusage_${node}_${timestamp}; sleep 1; done"
+		ssh -f ${node} "while true; do cat /proc/loadavg | awk '{print \$1}' >> ${HOME}/tmp/$1_cpuload_${node}_${timestamp}; sleep 1; done"
+		ssh -f ${node} "while true; do free | head -n 2 | tail -n 1 | awk '{print \$3, \$2, \$3/\$2}' >> ${HOME}/tmp/$1_memoryusage_${node}_${timestamp}; sleep 1; done"
+		ssh -f ${node} "iostat -d -x 1 ${DN} >> ${HOME}/tmp/$1_diskusage_${node}_${timestamp}"
+		ssh -f ${node} "sar -n DEV 1 >> ${HOME}/tmp/$1_networkusage_${node}_${timestamp}"
+		if [[ "$4" == "penguindb" ]]
+		then
+			ssh -f ${node} "mkdir -p ${HOME}/tmp/$1_perf_${node}_${timestamp}/storage; mkdir -p ${HOME}/tmp/$1_perf_${node}_${timestamp}/session; mkdir -p ${node}/tmp/$1_perf_${node}_${timestamp}/all"
+			if [[ "${node}" != "gp-master" ]]
+			then
+				sshpass -p ${rootpwd} ssh -t root@${node} "cd ${gptmp}; ./wkdbperf.sh $1 $2 $3 ${HOME} ${PORT} ${node} ${timestamp} 1 ${USERNAME}"
+			else
+				sshpass -p ${rootpwd} ssh -t root@${node} "cd ${gptmp}; ./wkdbperf.sh $1 $2 $3 ${HOME} ${PORT} ${node} ${timestamp} 0 ${USERNAME}"
+			fi
+		fi
+	done
+	set -e
+}
+
+STOP_MONITOR(){
+	if [[ ! -f "${HOME}/tmp/timestamp" ]]
+	then
+		ERROR "You don't have a monitor running..."
+		ERROR "Run START_MONITOR first."
+		return 0
+	fi
+
+	set +e
+	source ${HOME}/tmp/timestamp
+
+	kill -9 $(ps -aux | grep 'while true; do top'  | grep -v grep | grep -v 'ssh -f' | awk '{print $2}')
+	kill -9 $(ps -aux | grep 'while true; do cat'  | grep -v grep | grep -v 'ssh -f' | awk '{print $2}')
+	kill -9 $(ps -aux | grep 'while true; do free' | grep -v grep | grep -v 'ssh -f' | awk '{print $2}')
+	kill -9 $(ps -aux | grep "iostat -d -x 1 ${DN}"  | grep -v grep | grep -v 'ssh -f' | grep -v 'bash -c' | awk '{print $2}')
+	kill -9 $(ps -aux | grep 'sar -n DEV 1'        | grep -v grep | grep -v 'ssh -f' | grep -v 'bash -c' | awk '{print $2}')
+
+	metricData="${curResult}/metric/on_gp-master/"
+	mkdir -p ${metricData}
+
+	mv $HOME/tmp/$1_cpuusage_gp-master_${TIMESTAMP} ${metricData}
+	mv $HOME/tmp/$1_cpuload_gp-master_${TIMESTAMP} ${metricData}
+	mv $HOME/tmp/$1_memoryusage_gp-master_${TIMESTAMP} ${metricData}
+	mv $HOME/tmp/$1_diskusage_gp-master_${TIMESTAMP} ${metricData}
+	mv $HOME/tmp/$1_networkusage_gp-master_${TIMESTAMP} ${metricData}
+	if [[ "$2" == "penguindb" ]]
+	then
+		mv $HOME/tmp/$1_perf_gp-master_${TIMESTAMP} ${metricData}
+	fi
+
+	for node in ${segment_list[@]}
+	do
+		ssh ${node} "kill -9 \$(ps -aux | grep 'bash -c while true; do top' | grep -v grep | awk '{print \$2}')"
+		ssh ${node} "kill -9 \$(ps -aux | grep 'bash -c while true; do cat' | grep -v grep | awk '{print \$2}')"
+		ssh ${node} "kill -9 \$(ps -aux | grep 'bash -c while true; do free' | grep -v grep | awk '{print \$2}')"
+		ssh ${node} "kill -9 \$(ps -aux | grep 'iostat -d -x 1 $DN' | grep -v grep | awk '{print \$2}')"
+		ssh ${node} "kill -9 \$(ps -aux | grep 'sar -n DEV 1' | grep -v grep | awk '{print \$2}')"
+
+		metricData="${curResult}/metric/on_${node}/"
+		mkdir -p ${metricData}
+
+		scp ${node}:${HOME}/tmp/$1_cpuusage_${node}_${TIMESTAMP} ${metricData}
+		scp ${node}:${HOME}/tmp/$1_cpuload_${node}_${TIMESTAMP} ${metricData}
+		scp ${node}:${HOME}/tmp/$1_memoryusage_${node}_${TIMESTAMP} ${metricData}
+		scp ${node}:${HOME}/tmp/$1_diskusage_${node}_${TIMESTAMP} ${metricData}
+		scp ${node}:${HOME}/tmp/$1_networkusage_${node}_${TIMESTAMP} ${metricData}
+
+		# ssh ${node} "rm -rf ${HOME}/tmp/$1_cpuusage_${node}_${TIMESTAMP}"
+		# ssh ${node} "rm -rf ${HOME}/tmp/$1_cpuload_${node}_${TIMESTAMP}"
+		# ssh ${node} "rm -rf ${HOME}/tmp/$1_memoryusage_${node}_${TIMESTAMP}"
+		# ssh ${node} "rm -rf ${HOME}/tmp/$1_diskusage_${node}_${TIMESTAMP}"
+		# ssh ${node} "rm -rf ${HOME}/tmp/$1_networkusage_${node}_${TIMESTAMP}"
+
+		if [[ "$2" == "penguindb" ]]
+		then
+			scp -r ${node}:${HOME}/tmp/$1_perf_${node}_${TIMESTAMP} ${metricData}
+			# ssh ${node} "rm -rf ${HOME}/tmp/$1_perf_${node}_${TIMESTAMP}"
+		fi
+	done
+
+	rm -rf ${HOME}/tmp/timestamp
+	set -e
+}
+
+START_UP_CLUSTER(){
+	set +e
+	gpstart -a
+	set -e
+}
+
+START_UP_CLUSTER_COCKROACHDB(){
+	set +e
+	let "crdblastindex=crdb_node_num-1"
+	for index in $(seq 0 ${crdblastindex})
+	do
+		if [[ "${index}" == "0" ]]
+		then
+			# leader_ip=$(cat /etc/hosts | grep ${crdb_node_list[0]} | grep -v "127.0.0.1" | grep -v "::1" | awk '{print $1}' | head -n 1)
+			ssh -f ${crdb_node_list[0]} "cockroach start --insecure --host=${leader_ip} --port=${CPORT} --http-port=${CHPORT} --store=${crdb_data_path} --max-offset=100ms --max-sql-memory=.25 --cache=.25 --background"
+		else
+			ssh -f ${crdb_node_list[${index}]} "cockroach start --insecure --host=$(cat /etc/hosts | grep ${crdb_node_list[${index}]} | grep -v "127.0.0.1" | grep -v "::1" | awk '{print $1}' | head -n 1) --port=${CPORT} --http-port=${CHPORT} --store=${crdb_data_path} --max-offset=100ms --max-sql-memory=.25 --cache=.25 --background --join=${leader_ip}:${CPORT}"
+		fi
+	done
+	set -e
+}
+
+SHUTDOWN_CLUSTER(){
+	set +e
+	for seg in ${all_node_list[@]}
+	do
+		ssh ${seg} "kill -9 \$(ps -aux | grep ${USERNAME} | grep postgres | grep -v grep | awk '{print \$2}')"
+		ssh ${seg} "kill -9 \$(ps -aux | grep ${USERNAME} | grep postgres | grep -v grep | awk '{print \$2}')"
+		ssh ${seg} "find /tmp/.s.* -user ${USERNAME} -delete"
+		ssh ${seg} "find /tmp/.s.* -user ${USERNAME} -delete"
+	done
+	set -e
+}
+
+SHUTDOWN_CLUSTER_COCKROACHDB(){
+	set +e
+	for node in ${crdb_node_list[@]}
+	do
+		ssh ${node} "kill -9 \$(ps -aux | grep ${USERNAME} | grep cockroach | grep -v grep | awk '{print \$2}')"
+	done
+	set -e
+}
+
+RESTART_CLUSTER(){
+	SHUTDOWN_CLUSTER
+	sleep 5
+	START_UP_CLUSTER
+}
+
+RESTART_CLUSTER_COCKROACHDB(){
+	SHUTDOWN_CLUSTER_COCKROACHDB
+	sleep 5
+	START_UP_CLUSTER_COCKROACHDB
+}
+
+CREATE_CLUSTER(){
+	set +e
+	gpinitsystem -c ${gpinit}/gpinitsystem_config -a
+
+
+	gpconfig -c gp_enable_global_deadlock_detector -v on
+	gpconfig -c log_statement -v none
+	gpconfig -c max_connections -v 1800 -m 600
+	gpconfig -c max_prepared_transactions -v 600
+	gpconfig -c checkpoint_segments -v 2 --skipvalidation
+	gpconfig -c work_mem -v 1GB
+	gpconfig -c shared_buffers -v 10GB
+	gpconfig -c effective_cache_size -v 32GB
+	gpconfig -c maintenance_work_mem -v 512MB
+	gpconfig -c gp_vmem_protect_limit -v 102400
+	gpconfig -c max_statement_mem -v 16384MB
+	gpconfig -c statement_mem -v 2400MB
+	echo "host     all         all            0.0.0.0/0 trust" >> ${gpmaster}/pg_hba.conf
+
+	RESTART_CLUSTER
+
+	INFO "Wookongdb cluster has been deployed and started."
+	set -e
+}
+
+CREATE_CLUSTER_COCKROACHDB(){
+	START_UP_CLUSTER_COCKROACHDB
+}
+
+DESTROY_CLUSTER(){
+	SHUTDOWN_CLUSTER
+	sleep 5
+	set +e
+	rm -rf ${gpmaster}
+	for seg in ${segment_list[@]}
+	do
+		ssh ${seg} "rm -rf ${gpdatap}/*"
+	done
+	set -e
+}
+
+DESTROY_CLUSTER_COCKROACHDB(){
+	SHUTDOWN_CLUSTER_COCKROACHDB
+	set +e
+	for node in ${crdb_node_list[@]}
+	do
+		ssh ${node} "rm -rf ${crdb_data_path}"
+	done
+	set -e
+}
+
+CHECK_LTS_EXIST(){
+	if [[ "${LTS_LOCALE}" ]]
+	then
+		if [[ ! "$(ssh ${LTS_LOCALE} 'ps -aux | grep lts | grep -v grep | grep lts-cluster-service')" ]]
+		then
+			ssh ${LTS_LOCALE} /tmp/LTS/sbin/start-lts-cluster.sh
+		fi
+	else
+		if [[ ! "$(ps -aux | grep lts | grep -v grep | grep lts-cluster-service)" ]]
+		then
+			${ltspath}/start-lts-cluster.sh
+		fi
+	fi
+}
+
+DEPLOY_CLUSTER(){
+	DESTROY_CLUSTER
+	sleep 3
+	CHECK_LTS_EXIST
+	CREATE_CLUSTER
+}
+
+DEPLOY_CLUSTER_COCKROACHDB(){
+	DESTROY_CLUSTER_COCKROACHDB
+	sleep 3
+	CREATE_CLUSTER_COCKROACHDB
+}
+
+COMPILE_SRC(){
+	INFO "We are going to build Wookongdb from the source code under ${gpsrc}."
+	INFO "If this is not correct, please set gpsrc in ~/.bash_profile."
+
+	if [[ "${LTS_LOCALE}" ]]
+	then
+		ssh ${LTS_LOCALE} "touch /tmp/LTS; rm -rf /tmp/LTS"
+		scp -r ${gpsrc}/depends/LTS ${LTS_LOCALE}:/tmp
+		ssh ${LTS_LOCALE} "sed -i \"s/SELF_GENERATE_LTS_IP/${LTS_IP}/g\" /tmp/LTS/conf/config.toml; cd /tmp/LTS/sbin; bash start-lts-cluster.sh"
+	fi
+
+	if [[ "${FIRST}" ]]
+	then
+		rm -rf ${gptmp}
+		cp -r ${gpsrc} ${gptmp}
+	else
+		rm -rf ${gptmp}/src
+		cp -r ${gpsrc}/src ${gptmp}/
+	fi
+
+	if [[ "${LTS_LOCALE}" ]]
+	then
+		sed -i "s/10.77.110.144/${LTS_IP}/g" ${gptmp}/src/include/libtcp/ip.h
+	fi
+
+	cd ${gptmp}
+
+	if [[ "${DEBUG}" ]]
+	then
+		INFO "compile in debug mode..."
+		if [[ "${ATRUC}" ]]
+		then
+			./configure --prefix=${gpbin} --with-perl --with-python --with-libxml --disable-orca --enable-cassert --disable-pxf CFLAGS='-g3 -ggdb -O0 -fno-strict-aliasing -ldl -fno-omit-frame-pointer' CXXFLAGS='-std=c++11 -g3 -ggdb -O0 -fno-strict-aliasing -ldl -fno-omit-frame-pointer'
+		else
+			./configure --prefix=${gpbin} --with-perl --with-gssapi --with-python --with-libxml --with-includes=/usr/include --enable-debug --enable-cassert --disable-orca --without-zstd CFLAGS='-O0 -g3 -ggdb3 -fno-omit-frame-pointer'
+		fi
+	else
+		INFO "compile in release mode..."
+		if [[ "${ATRUC}" ]]
+		then
+			./configure --prefix=${gpbin} --with-perl --with-python --with-libxml --disable-orca --disable-cassert --disable-pxf CFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -ldl -fno-omit-frame-pointer' CXXFLAGS='-std=c++11 -g3 -ggdb -O3 -fno-strict-aliasing -ldl -fno-omit-frame-pointer'
+		else
+			./configure --prefix=${gpbin} --with-perl --with-gssapi --with-python --with-libxml --with-includes=/usr/include --disable-cassert --disable-orca --disable-pxf --disable-gpfdisk --without-zstd CFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -fno-omit-frame-pointer' CXXFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -fno-omit-frame-pointer'
+		fi
+	fi
+
+	if [[ "${ATRUC}" ]]
+	then
+		sed -i 's/LIBS = -lbz2 -lxml2 -lrt -lzstd -lz -lreadline -lrt -lcrypt -lm  -lcurl/LIBS = -lstdc++ -lprotobuf -lrocksdb -lbz2 -lxml2 -lrt -lz -lreadline -lrt -lcrypt -lm -lcurl -llz4 -lzstd -lsnappy -lpthread/g' ./src/Makefile.global
+	else
+		sed -i 's/LIBS = -lbz2 -lxml2 -lrt -lgssapi_krb5 -lz -lreadline -lrt -lcrypt -ldl -lm  -lcurl/LIBS = -lbz2 -lxml2 -lrt -lgssapi_krb5 -lz -lreadline -lrt -lcrypt -ldl -lm  -lcurl  -lzstd -llz4 -lsnappy -lpthread -lprotobuf -lrocksdb/g' ./src/Makefile.global
+	fi
+
+	make -j32 > /dev/null
+	make install > /dev/null
+
+	cd ${gptmp}/contrib/pgbench
+	make
+	make install
+	source ${gpbin}/greenplum_path.sh
+
+	for seg in ${segment_list[@]}
+	do
+		if [[ "${COPY_TMP}" ]]
+		then
+			INFO "try to delete the old tmp code in ${seg}."
+			ssh ${seg} rm -rf ${gptmp}
+			INFO "delete complete."
+			INFO "try to copy the tmp code in ${seg}."
+			scp -rq ${gptmp} ${seg}:${gpcptmp}
+			INFO "copy done."
+		fi
+		INFO "try to delete the old bin in ${seg}."
+		ssh ${seg} rm -rf ${gpbin}
+		INFO "delete complete."
+		INFO "try to copy the bin in ${seg}."
+		scp -rq ${gpbin} ${seg}:${gpcpbin}
+		INFO "copy done."
+	done
+}
+
+CREATE_RAND_FUNCTION(){
+psql $1 << EOF
+create extension pg_oltp_bench ;
+EOF
+}
+
+CREATE_HEAP_DATABASE_FOR_TPCB(){
+	INFO "TPCB HEAP DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbheap"
+	CREATE_RAND_FUNCTION tpcbheap
+
+	export PGDATABASE=tpcbheap
+	pgbench -i -s ${SIZE} -n -w ${WORKERS}
+	set -e
+	INFO "TPCB HEAP DATABASE BUILDING COMPLETE."
+}
+
+CREATE_ROCKSDB_DATABASE_FOR_TPCB(){
+	INFO "TPCB ROCKSDB DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbrocksdb"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbrocksdb SET default_transaction_isolation = 'repeatable read'"
+	CREATE_RAND_FUNCTION tpcbrocksdb
+
+	export PGDATABASE=tpcbrocksdb
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB ROCKSDB DATABASE BUILDING COMPLETE."
+}
+
+CREATE_FOCC_DATABASE_FOR_TPCB(){
+	INFO "TPCB FOCC DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbfocc"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbfocc SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbfocc SET transam_mode = 'occ'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbfocc SET consistency_mode = 'default'"
+	set -e
+	CREATE_RAND_FUNCTION tpcbfocc
+	export PGDATABASE=tpcbfocc
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	INFO "TPCB FOCC DATABASE BUILDING COMPLETE."
+}
+
+CREATE_BOCC_DATABASE_FOR_TPCB(){
+	INFO "TPCB BOCC DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbbocc"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbbocc SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbbocc SET transam_mode = 'docc'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbbocc SET consistency_mode = 'default'"
+	CREATE_RAND_FUNCTION tpcbbocc
+
+	export PGDATABASE=tpcbbocc
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB BOCC DATABASE BUILDING COMPLETE."
+}
+
+CREATE_DTA_DATABASE_FOR_TPCB(){
+	INFO "TPCB DTA DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbdta"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbdta SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbdta SET transam_mode = 'rucc'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbdta SET consistency_mode = 'sequence'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbdta SET rocksdb_scan_forward = 'backward'"
+	CREATE_RAND_FUNCTION tpcbdta
+
+	export PGDATABASE=tpcbdta
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB DTA DATABASE BUILDING COMPLETE."
+}
+
+CREATE_SSS_DATABASE_FOR_TPCB(){
+	INFO "TPCB SSS DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbsss"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbsss SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbsss SET transam_mode = 'rucc'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbsss SET consistency_mode = 'default'"
+	CREATE_RAND_FUNCTION tpcbsss
+
+	export PGDATABASE=tpcbsss
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB SSS DATABASE BUILDING COMPLETE."
+}
+
+CREATE_SS_DATABASE_FOR_TPCB(){
+	INFO "TPCB SS DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbss"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbss SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbss SET transam_mode = 'rucc'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbss SET consistency_mode = 'sequence'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbss SET rocksdb_scan_forward = 'backward'"
+	CREATE_RAND_FUNCTION tpcbss
+
+	export PGDATABASE=tpcbss
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB SS DATABASE BUILDING COMPLETE."
+}
+
+CREATE_CRR_DATABASE_FOR_TPCB(){
+	INFO "TPCB CRR DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbcrr"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbcrr SET default_transaction_isolation = 'repeatable read'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbcrr SET transam_mode = 'default'"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbcrr SET consistency_mode = 'causal'"
+	CREATE_RAND_FUNCTION tpcbcrr
+
+	export PGDATABASE=tpcbcrr
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB CRR DATABASE BUILDING COMPLETE."
+}
+
+CREATE_WOOKONGDB_DATABASE_FOR_TPCB(){
+	INFO "TPCB WOOKONGDB DATABASE BUILDING..."
+
+	set +e
+	psql -d ${DEFAULTDB} -c "CREATE DATABASE tpcbwookongdb"
+	psql -d ${DEFAULTDB} -c "ALTER DATABASE tpcbwookongdb SET default_transaction_isolation = 'repeatable read'"
+	CREATE_RAND_FUNCTION tpcbwookongdb
+
+	export PGDATABASE=tpcbwookongdb
+	pgbench -i -s ${SIZE} -n -w ${WORKERS} -x storage_engine=rocksdb
+	set -e
+	INFO "TPCB WOOKONGDB DATABASE BUILDING COMPLETE."
+}
+
+CREATE_COCKROACHDB_DATABASE_FOR_TPCB(){
+	INFO "TPCB COCKROACHDB DATABASE BUILDING..."
+
+	export PGDATABASE=defaultdb
+	pgbench -i -s ${SIZE} -w ${WORKERS} -a -n -h ${leader_ip} -p ${CPORT} -U root
+
+	INFO "TPCB COCKROACHDB DATABASE BUILDING COMPLETE."
+}
+
+REPLACE(){
+	sed -i "s/gpadmin/${USERNAME}/g" $1
+	sed -i "s/15432/${PORT}/g" $1
+}
+
+INSERT_FUNCTION(){
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION DBMS_RANDOM (INTEGER, INTEGER) RETURNS INTEGER AS \$\$
+DECLARE
+	start_int ALIAS FOR \$1;
+	end_int ALIAS FOR \$2;
+BEGIN
+	RETURN trunc(random() * (end_int-start_int) + start_int);
+END;
+\$\$ LANGUAGE 'plpgsql' STRICT;
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION NEWORD (INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER) RETURNS NUMERIC AS '
+DECLARE
+no_w_id ALIAS FOR \$1;
+no_max_w_id ALIAS FOR \$2;
+no_d_id ALIAS FOR \$3;
+no_c_id ALIAS FOR \$4;
+no_o_ol_cnt ALIAS FOR \$5;
+no_d_next_o_id ALIAS FOR \$6;
+no_c_discount NUMERIC;
+no_c_last VARCHAR;
+no_c_credit VARCHAR;
+no_d_tax NUMERIC;
+no_w_tax NUMERIC;
+tstamp TIMESTAMP;
+no_ol_supply_w_id INTEGER;
+no_ol_i_id NUMERIC;
+no_ol_quantity NUMERIC;
+no_o_all_local INTEGER;
+o_id INTEGER;
+no_i_name VARCHAR(24);
+no_i_price NUMERIC(5,2);
+no_i_data VARCHAR(50);
+no_s_quantity NUMERIC(6);
+no_ol_amount NUMERIC(6,2);
+no_s_dist_01 CHAR(24);
+no_s_dist_02 CHAR(24);
+no_s_dist_03 CHAR(24);
+no_s_dist_04 CHAR(24);
+no_s_dist_05 CHAR(24);
+no_s_dist_06 CHAR(24);
+no_s_dist_07 CHAR(24);
+no_s_dist_08 CHAR(24);
+no_s_dist_09 CHAR(24);
+no_s_dist_10 CHAR(24);
+no_ol_dist_info CHAR(24);
+no_s_data VARCHAR(50);
+x NUMERIC;
+rbk NUMERIC;
+BEGIN
+--assignment below added due to error in appendix code
+no_o_all_local := 0;
+SELECT c_discount, c_last, c_credit, w_tax
+INTO no_c_discount, no_c_last, no_c_credit, no_w_tax
+FROM customer, warehouse
+WHERE warehouse.w_id = no_w_id AND customer.c_w_id = no_w_id AND
+customer.c_d_id = no_d_id AND customer.c_id = no_c_id;
+UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_id = no_d_id AND d_w_id = no_w_id RETURNING d_next_o_id, d_tax INTO no_d_next_o_id, no_d_tax;
+o_id := no_d_next_o_id;
+INSERT INTO ORDERS (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local) VALUES (o_id, no_d_id, no_w_id, no_c_id, current_timestamp, no_o_ol_cnt, no_o_all_local);
+INSERT INTO NEW_ORDER (no_o_id, no_d_id, no_w_id) VALUES (o_id, no_d_id, no_w_id);
+--#2.4.1.4
+rbk := round(DBMS_RANDOM(1,100));
+--#2.4.1.5
+FOR loop_counter IN 1 .. no_o_ol_cnt
+LOOP
+IF ((loop_counter = no_o_ol_cnt) AND (rbk = 1))
+THEN
+no_ol_i_id := 100001;
+ELSE
+no_ol_i_id := round(DBMS_RANDOM(1,100000));
+END IF;
+--#2.4.1.5.2
+x := round(DBMS_RANDOM(1,100));
+IF ( x > 1 )
+THEN
+no_ol_supply_w_id := no_w_id;
+ELSE
+no_ol_supply_w_id := no_w_id;
+--no_all_local is actually used before this point so following not beneficial
+no_o_all_local := 0;
+WHILE ((no_ol_supply_w_id = no_w_id) AND (no_max_w_id != 1))
+LOOP
+no_ol_supply_w_id := round(DBMS_RANDOM(1,no_max_w_id));
+END LOOP;
+END IF;
+--#2.4.1.5.3
+no_ol_quantity := round(DBMS_RANDOM(1,10));
+SELECT i_price, i_name, i_data INTO no_i_price, no_i_name, no_i_data
+FROM item WHERE i_id = no_ol_i_id;
+SELECT s_quantity, s_data, s_dist_01, s_dist_02, s_dist_03, s_dist_04, s_dist_05, s_dist_06, s_dist_07, s_dist_08, s_dist_09, s_dist_10
+INTO no_s_quantity, no_s_data, no_s_dist_01, no_s_dist_02, no_s_dist_03, no_s_dist_04, no_s_dist_05, no_s_dist_06, no_s_dist_07, no_s_dist_08, no_s_dist_09, no_s_dist_10 FROM stock WHERE s_i_id = no_ol_i_id AND s_w_id = no_ol_supply_w_id;
+IF ( no_s_quantity > no_ol_quantity )
+THEN
+no_s_quantity := ( no_s_quantity - no_ol_quantity );
+ELSE
+no_s_quantity := ( no_s_quantity - no_ol_quantity + 91 );
+END IF;
+UPDATE stock SET s_quantity = no_s_quantity
+WHERE s_i_id = no_ol_i_id
+AND s_w_id = no_ol_supply_w_id;
+
+no_ol_amount := (  no_ol_quantity * no_i_price * ( 1 + no_w_tax + no_d_tax ) * ( 1 - no_c_discount ) );
+
+IF no_d_id = 1
+THEN
+no_ol_dist_info := no_s_dist_01;
+
+ELSIF no_d_id = 2
+THEN
+no_ol_dist_info := no_s_dist_02;
+
+ELSIF no_d_id = 3
+THEN
+no_ol_dist_info := no_s_dist_03;
+
+ELSIF no_d_id = 4
+THEN
+no_ol_dist_info := no_s_dist_04;
+
+ELSIF no_d_id = 5
+THEN
+no_ol_dist_info := no_s_dist_05;
+
+ELSIF no_d_id = 6
+THEN
+no_ol_dist_info := no_s_dist_06;
+
+ELSIF no_d_id = 7
+THEN
+no_ol_dist_info := no_s_dist_07;
+
+ELSIF no_d_id = 8
+THEN
+no_ol_dist_info := no_s_dist_08;
+
+ELSIF no_d_id = 9
+THEN
+no_ol_dist_info := no_s_dist_09;
+
+ELSIF no_d_id = 10
+THEN
+no_ol_dist_info := no_s_dist_10;
+END IF;
+
+INSERT INTO order_line (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
+VALUES (o_id, no_d_id, no_w_id, loop_counter, no_ol_i_id, no_ol_supply_w_id, no_ol_quantity, no_ol_amount, no_ol_dist_info);
+
+END LOOP;
+RETURN no_s_quantity;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION DELIVERY (INTEGER, INTEGER) RETURNS INTEGER AS '
+DECLARE
+d_w_id ALIAS FOR \$1;
+d_o_carrier_id  ALIAS FOR \$2;
+d_d_id INTEGER;
+d_c_id NUMERIC;
+d_no_o_id INTEGER;
+d_ol_total NUMERIC;
+loop_counter INTEGER;
+BEGIN
+FOR loop_counter IN 1 .. 10
+LOOP
+d_d_id := loop_counter;
+SELECT no_o_id INTO d_no_o_id FROM new_order WHERE no_w_id = d_w_id AND no_d_id = d_d_id ORDER BY no_o_id ASC LIMIT 1;
+DELETE FROM new_order WHERE no_w_id = d_w_id AND no_d_id = d_d_id AND no_o_id = d_no_o_id;
+SELECT o_c_id INTO d_c_id FROM orders
+WHERE o_id = d_no_o_id AND o_d_id = d_d_id AND
+o_w_id = d_w_id;
+ UPDATE orders SET o_carrier_id = d_o_carrier_id
+WHERE o_id = d_no_o_id AND o_d_id = d_d_id AND
+o_w_id = d_w_id;
+UPDATE order_line SET ol_delivery_d = current_timestamp
+WHERE ol_o_id = d_no_o_id AND ol_d_id = d_d_id AND
+ol_w_id = d_w_id;
+SELECT SUM(ol_amount) INTO d_ol_total
+FROM order_line
+WHERE ol_o_id = d_no_o_id AND ol_d_id = d_d_id
+AND ol_w_id = d_w_id;
+UPDATE customer SET c_balance = c_balance + d_ol_total
+WHERE c_id = d_c_id AND c_d_id = d_d_id AND
+c_w_id = d_w_id;
+END LOOP;
+RETURN 1;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION SLEV (INTEGER, INTEGER, INTEGER) RETURNS INTEGER AS '
+DECLARE
+st_w_id ALIAS FOR \$1;
+st_d_id ALIAS FOR \$2;
+threshold ALIAS FOR \$3;
+
+st_o_id NUMERIC;
+stock_count INTEGER;
+BEGIN
+SELECT d_next_o_id INTO st_o_id
+FROM district
+WHERE d_w_id=st_w_id AND d_id=st_d_id;
+
+SELECT COUNT(DISTINCT (s_i_id)) INTO stock_count
+FROM order_line, stock
+WHERE ol_w_id = st_w_id AND
+ol_d_id = st_d_id AND (ol_o_id < st_o_id) AND
+ol_o_id >= (st_o_id - 20) AND s_w_id = st_w_id AND
+s_i_id = ol_i_id AND s_quantity < threshold;
+RETURN stock_count;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION OSTAT (INTEGER, INTEGER, INTEGER, INTEGER, VARCHAR) RETURNS SETOF record AS '
+DECLARE
+os_w_id ALIAS FOR \$1;
+os_d_id ALIAS FOR \$2;
+os_c_id ALIAS FOR \$3;
+byname ALIAS FOR \$4;
+os_c_last ALIAS FOR \$5;
+out_os_c_id INTEGER;
+out_os_c_last VARCHAR;
+os_c_first VARCHAR;
+os_c_middle VARCHAR;
+os_c_balance NUMERIC;
+os_o_id INTEGER;
+os_entdate TIMESTAMP;
+os_o_carrier_id INTEGER;
+os_ol RECORD;
+namecnt INTEGER;
+c_name CURSOR FOR
+SELECT c_balance, c_first, c_middle, c_id
+FROM customer
+WHERE c_last = os_c_last AND c_d_id = os_d_id AND c_w_id = os_w_id
+ORDER BY c_first;
+BEGIN
+IF ( byname = 1 )
+THEN
+SELECT count(c_id) INTO namecnt
+FROM customer
+WHERE c_last = os_c_last AND c_d_id = os_d_id AND c_w_id = os_w_id;
+IF ( MOD (namecnt, 2) = 1 )
+THEN
+namecnt := (namecnt + 1);
+END IF;
+OPEN c_name;
+FOR loop_counter IN 0 .. cast((namecnt/2) AS INTEGER)
+LOOP
+FETCH c_name
+INTO os_c_balance, os_c_first, os_c_middle, os_c_id;
+END LOOP;
+close c_name;
+ELSE
+SELECT c_balance, c_first, c_middle, c_last
+INTO os_c_balance, os_c_first, os_c_middle, os_c_last
+FROM customer
+WHERE c_id = os_c_id AND c_d_id = os_d_id AND c_w_id = os_w_id;
+END IF;
+SELECT o_id, o_carrier_id, o_entry_d
+INTO os_o_id, os_o_carrier_id, os_entdate
+FROM
+(SELECT o_id, o_carrier_id, o_entry_d
+FROM orders where o_d_id = os_d_id AND o_w_id = os_w_id and o_c_id=os_c_id
+ORDER BY o_id DESC) AS SUBQUERY
+LIMIT 1;
+FOR os_ol IN
+SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d, out_os_c_id, out_os_c_last, os_c_first, os_c_middle, os_c_balance, os_o_id, os_entdate, os_o_carrier_id
+FROM order_line
+WHERE ol_o_id = os_o_id AND ol_d_id = os_d_id AND ol_w_id = os_w_id
+LOOP
+RETURN NEXT os_ol;
+END LOOP;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION PAYMENT (INTEGER, INTEGER, INTEGER, INTEGER, NUMERIC, INTEGER, NUMERIC, VARCHAR, VARCHAR, NUMERIC ) RETURNS INTEGER AS '
+DECLARE
+p_w_id ALIAS FOR \$1;
+p_d_id ALIAS FOR \$2;
+p_c_w_id ALIAS FOR \$3;
+p_c_d_id ALIAS FOR \$4;
+p_c_id_in ALIAS FOR \$5;
+byname ALIAS FOR \$6;
+p_h_amount ALIAS FOR \$7;
+p_c_last_in	 ALIAS FOR \$8;
+p_c_credit_in ALIAS FOR \$9;
+p_c_balance_in ALIAS FOR \$10;
+p_c_balance NUMERIC(12, 2);
+p_c_credit CHAR(2);
+p_c_last VARCHAR(16);
+p_c_id NUMERIC(5,0);
+p_w_street_1 VARCHAR(20);
+p_w_street_2 VARCHAR(20);
+p_w_city VARCHAR(20);
+p_w_state CHAR(2);
+p_w_zip CHAR(9);
+p_d_street_1 VARCHAR(20);
+p_d_street_2 VARCHAR(20);
+p_d_city VARCHAR(20);
+p_d_state CHAR(2);
+p_d_zip CHAR(9);
+p_c_first VARCHAR(16);
+p_c_middle CHAR(2);
+p_c_street_1 VARCHAR(20);
+p_c_street_2 VARCHAR(20);
+p_c_city VARCHAR(20);
+p_c_state CHAR(2);
+p_c_zip CHAR(9);
+p_c_phone CHAR(16);
+p_c_since TIMESTAMP;
+p_c_credit_lim NUMERIC(12, 2);
+p_c_discount NUMERIC(4, 4);
+p_c_data VARCHAR(500);
+tstamp TIMESTAMP;
+namecnt INTEGER;
+p_d_name VARCHAR(11);
+p_w_name VARCHAR(11);
+p_c_new_data VARCHAR(500);
+h_data VARCHAR(30);
+c_byname CURSOR FOR
+SELECT c_first, c_middle, c_id,
+c_street_1, c_street_2, c_city, c_state, c_zip,
+c_phone, c_credit, c_credit_lim,
+c_discount, c_balance, c_since
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_last = p_c_last
+ORDER BY c_first;
+BEGIN
+p_c_balance := p_c_balance_in;
+p_c_id := p_c_id_in;
+p_c_last := p_c_last_in;
+p_c_credit := p_c_credit_in;
+tstamp := current_timestamp;
+UPDATE warehouse SET w_ytd = w_ytd + p_h_amount
+WHERE w_id = p_w_id;
+SELECT w_street_1, w_street_2, w_city, w_state, w_zip, w_name
+INTO p_w_street_1, p_w_street_2, p_w_city, p_w_state, p_w_zip, p_w_name
+FROM warehouse
+WHERE w_id = p_w_id;
+UPDATE district SET d_ytd = d_ytd + p_h_amount
+WHERE d_w_id = p_w_id AND d_id = p_d_id;
+SELECT d_street_1, d_street_2, d_city, d_state, d_zip, d_name
+INTO p_d_street_1, p_d_street_2, p_d_city, p_d_state, p_d_zip, p_d_name
+FROM district
+WHERE d_w_id = p_w_id AND d_id = p_d_id;
+IF ( byname = 1 )
+THEN
+SELECT count(c_id) INTO namecnt
+FROM customer
+WHERE c_last = p_c_last AND c_d_id = p_c_d_id AND c_w_id = p_c_w_id;
+OPEN c_byname;
+IF ( MOD (namecnt, 2) = 1 )
+THEN
+namecnt := (namecnt + 1);
+END IF;
+FOR loop_counter IN 0 .. cast((namecnt/2) AS INTEGER)
+LOOP
+FETCH c_byname
+INTO p_c_first, p_c_middle, p_c_id, p_c_street_1, p_c_street_2, p_c_city,
+p_c_state, p_c_zip, p_c_phone, p_c_credit, p_c_credit_lim, p_c_discount, p_c_balance, p_c_since;
+END LOOP;
+CLOSE c_byname;
+ELSE
+SELECT c_first, c_middle, c_last,
+c_street_1, c_street_2, c_city, c_state, c_zip,
+c_phone, c_credit, c_credit_lim,
+c_discount, c_balance, c_since
+INTO p_c_first, p_c_middle, p_c_last,
+p_c_street_1, p_c_street_2, p_c_city, p_c_state, p_c_zip,
+p_c_phone, p_c_credit, p_c_credit_lim,
+p_c_discount, p_c_balance, p_c_since
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_id = p_c_id;
+END IF;
+p_c_balance := ( p_c_balance + p_h_amount );
+IF p_c_credit = ''BC''
+THEN
+ SELECT c_data INTO p_c_data
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_id = p_c_id;
+h_data := p_w_name || '' '' || p_d_name;
+p_c_new_data := (p_c_id || '' '' || p_c_d_id || '' '' || p_c_w_id || '' '' || p_d_id || '' '' || p_w_id || '' '' || TO_CHAR(p_h_amount,''9999.99'') || TO_CHAR(tstamp,''YYYYMMDDHH24MISS'') || h_data);
+p_c_new_data := substr(CONCAT(p_c_new_data,p_c_data),1,500-(LENGTH(p_c_new_data)));
+UPDATE customer
+SET c_balance = p_c_balance, c_data = p_c_new_data
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND
+c_id = p_c_id;
+ELSE
+UPDATE customer SET c_balance = p_c_balance
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND
+c_id = p_c_id;
+END IF;
+h_data := p_w_name || '' '' || p_d_name;
+INSERT INTO history (h_c_d_id, h_c_w_id, h_c_id, h_d_id,
+h_w_id, h_date, h_amount, h_data)
+VALUES (p_c_d_id, p_c_w_id, p_c_id, p_d_id,
+p_w_id, tstamp, p_h_amount, h_data);
+RETURN p_c_id;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+}
+
+INSERT_FUNCTION_OCC(){
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION DBMS_RANDOM (INTEGER, INTEGER) RETURNS INTEGER AS \$\$
+DECLARE
+	start_int ALIAS FOR \$1;
+	end_int ALIAS FOR \$2;
+BEGIN
+	RETURN trunc(random() * (end_int-start_int) + start_int);
+END;
+\$\$ LANGUAGE 'plpgsql' STRICT;
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION NEWORD (INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER) RETURNS NUMERIC AS '
+DECLARE
+no_w_id ALIAS FOR \$1;
+no_max_w_id ALIAS FOR \$2;
+no_d_id ALIAS FOR \$3;
+no_c_id ALIAS FOR \$4;
+no_o_ol_cnt ALIAS FOR \$5;
+no_d_next_o_id ALIAS FOR \$6;
+no_c_discount NUMERIC;
+no_c_last VARCHAR;
+no_c_credit VARCHAR;
+no_d_tax NUMERIC;
+no_w_tax NUMERIC;
+tstamp TIMESTAMP;
+no_ol_supply_w_id INTEGER;
+no_ol_i_id NUMERIC;
+no_ol_quantity NUMERIC;
+no_o_all_local INTEGER;
+o_id INTEGER;
+no_i_name VARCHAR(24);
+no_i_price NUMERIC(5,2);
+no_i_data VARCHAR(50);
+no_s_quantity NUMERIC(6);
+no_ol_amount NUMERIC(6,2);
+no_s_dist_01 CHAR(24);
+no_s_dist_02 CHAR(24);
+no_s_dist_03 CHAR(24);
+no_s_dist_04 CHAR(24);
+no_s_dist_05 CHAR(24);
+no_s_dist_06 CHAR(24);
+no_s_dist_07 CHAR(24);
+no_s_dist_08 CHAR(24);
+no_s_dist_09 CHAR(24);
+no_s_dist_10 CHAR(24);
+no_ol_dist_info CHAR(24);
+no_s_data VARCHAR(50);
+x NUMERIC;
+rbk NUMERIC;
+returning1 NUMERIC;
+BEGIN
+--assignment below added due to error in appendix code
+no_o_all_local := 0;
+SELECT c_discount, c_last, c_credit, w_tax
+INTO no_c_discount, no_c_last, no_c_credit, no_w_tax
+FROM customer, warehouse
+WHERE warehouse.w_id = no_w_id AND customer.c_w_id = no_w_id AND
+customer.c_d_id = no_d_id AND customer.c_id = no_c_id;
+UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_id = no_d_id AND d_w_id = no_w_id RETURNING d_next_o_id, d_tax INTO no_d_next_o_id, no_d_tax;
+o_id := no_d_next_o_id;
+INSERT INTO ORDERS (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_ol_cnt, o_all_local) VALUES (o_id, no_d_id, no_w_id, no_c_id, current_timestamp, no_o_ol_cnt, no_o_all_local);
+INSERT INTO NEW_ORDER (no_o_id, no_d_id, no_w_id) VALUES (o_id, no_d_id, no_w_id);
+--#2.4.1.4
+rbk := round(DBMS_RANDOM(1,100));
+--#2.4.1.5
+FOR loop_counter IN 1 .. no_o_ol_cnt
+LOOP
+IF ((loop_counter = no_o_ol_cnt) AND (rbk = 1))
+THEN
+no_ol_i_id := 100001;
+ELSE
+no_ol_i_id := round(DBMS_RANDOM(1,100000));
+END IF;
+--#2.4.1.5.2
+x := round(DBMS_RANDOM(1,100));
+IF ( x > 1 )
+THEN
+no_ol_supply_w_id := no_w_id;
+ELSE
+no_ol_supply_w_id := no_w_id;
+--no_all_local is actually used before this point so following not beneficial
+no_o_all_local := 0;
+WHILE ((no_ol_supply_w_id = no_w_id) AND (no_max_w_id != 1))
+LOOP
+no_ol_supply_w_id := round(DBMS_RANDOM(1,no_max_w_id));
+END LOOP;
+END IF;
+--#2.4.1.5.3
+no_ol_quantity := round(DBMS_RANDOM(1,10));
+SELECT i_price, i_name, i_data INTO no_i_price, no_i_name, no_i_data
+FROM item WHERE i_id = no_ol_i_id;
+SELECT s_quantity, s_data, s_dist_01, s_dist_02, s_dist_03, s_dist_04, s_dist_05, s_dist_06, s_dist_07, s_dist_08, s_dist_09, s_dist_10
+INTO no_s_quantity, no_s_data, no_s_dist_01, no_s_dist_02, no_s_dist_03, no_s_dist_04, no_s_dist_05, no_s_dist_06, no_s_dist_07, no_s_dist_08, no_s_dist_09, no_s_dist_10 FROM stock WHERE s_i_id = no_ol_i_id AND s_w_id = no_ol_supply_w_id;
+IF ( no_s_quantity > no_ol_quantity )
+THEN
+no_s_quantity := ( no_s_quantity - no_ol_quantity );
+ELSE
+no_s_quantity := ( no_s_quantity - no_ol_quantity + 91 );
+END IF;
+UPDATE stock SET s_quantity = no_s_quantity
+WHERE s_i_id = no_ol_i_id
+AND s_w_id = no_ol_supply_w_id RETURNING s_quantity INTO returning1;
+
+no_ol_amount := (  no_ol_quantity * no_i_price * ( 1 + no_w_tax + no_d_tax ) * ( 1 - no_c_discount ) );
+
+IF no_d_id = 1
+THEN
+no_ol_dist_info := no_s_dist_01;
+
+ELSIF no_d_id = 2
+THEN
+no_ol_dist_info := no_s_dist_02;
+
+ELSIF no_d_id = 3
+THEN
+no_ol_dist_info := no_s_dist_03;
+
+ELSIF no_d_id = 4
+THEN
+no_ol_dist_info := no_s_dist_04;
+
+ELSIF no_d_id = 5
+THEN
+no_ol_dist_info := no_s_dist_05;
+
+ELSIF no_d_id = 6
+THEN
+no_ol_dist_info := no_s_dist_06;
+
+ELSIF no_d_id = 7
+THEN
+no_ol_dist_info := no_s_dist_07;
+
+ELSIF no_d_id = 8
+THEN
+no_ol_dist_info := no_s_dist_08;
+
+ELSIF no_d_id = 9
+THEN
+no_ol_dist_info := no_s_dist_09;
+
+ELSIF no_d_id = 10
+THEN
+no_ol_dist_info := no_s_dist_10;
+END IF;
+
+INSERT INTO order_line (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_dist_info)
+VALUES (o_id, no_d_id, no_w_id, loop_counter, no_ol_i_id, no_ol_supply_w_id, no_ol_quantity, no_ol_amount, no_ol_dist_info);
+
+END LOOP;
+RETURN no_s_quantity;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION DELIVERY (INTEGER, INTEGER) RETURNS INTEGER AS '
+DECLARE
+d_w_id ALIAS FOR \$1;
+d_o_carrier_id  ALIAS FOR \$2;
+d_d_id INTEGER;
+d_c_id NUMERIC;
+d_no_o_id INTEGER;
+d_ol_total NUMERIC;
+loop_counter INTEGER;
+returning1 NUMERIC;
+returning2 DATE;
+returning3 NUMERIC;
+BEGIN
+FOR loop_counter IN 1 .. 10
+LOOP
+d_d_id := loop_counter;
+SELECT no_o_id INTO d_no_o_id FROM new_order WHERE no_w_id = d_w_id AND no_d_id = d_d_id ORDER BY no_o_id ASC LIMIT 1;
+DELETE FROM new_order WHERE no_w_id = d_w_id AND no_d_id = d_d_id AND no_o_id = d_no_o_id;
+SELECT o_c_id INTO d_c_id FROM orders
+WHERE o_id = d_no_o_id AND o_d_id = d_d_id AND
+o_w_id = d_w_id;
+ UPDATE orders SET o_carrier_id = d_o_carrier_id
+WHERE o_id = d_no_o_id AND o_d_id = d_d_id AND
+o_w_id = d_w_id RETURNING o_carrier_id INTO returning1;
+UPDATE order_line SET ol_delivery_d = current_timestamp
+WHERE ol_o_id = d_no_o_id AND ol_d_id = d_d_id AND
+ol_w_id = d_w_id;
+SELECT SUM(ol_amount) INTO d_ol_total
+FROM order_line
+WHERE ol_o_id = d_no_o_id AND ol_d_id = d_d_id
+AND ol_w_id = d_w_id;
+UPDATE customer SET c_balance = c_balance + d_ol_total
+WHERE c_id = d_c_id AND c_d_id = d_d_id AND
+c_w_id = d_w_id RETURNING c_balance INTO returning3;
+END LOOP;
+RETURN 1;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION SLEV (INTEGER, INTEGER, INTEGER) RETURNS INTEGER AS '
+DECLARE
+st_w_id ALIAS FOR \$1;
+st_d_id ALIAS FOR \$2;
+threshold ALIAS FOR \$3;
+
+st_o_id NUMERIC;
+stock_count INTEGER;
+BEGIN
+SELECT d_next_o_id INTO st_o_id
+FROM district
+WHERE d_w_id=st_w_id AND d_id=st_d_id;
+
+SELECT COUNT(DISTINCT (s_i_id)) INTO stock_count
+FROM order_line, stock
+WHERE ol_w_id = st_w_id AND
+ol_d_id = st_d_id AND (ol_o_id < st_o_id) AND
+ol_o_id >= (st_o_id - 20) AND s_w_id = st_w_id AND
+s_i_id = ol_i_id AND s_quantity < threshold;
+RETURN stock_count;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION OSTAT (INTEGER, INTEGER, INTEGER, INTEGER, VARCHAR) RETURNS SETOF record AS '
+DECLARE
+os_w_id ALIAS FOR \$1;
+os_d_id ALIAS FOR \$2;
+os_c_id ALIAS FOR \$3;
+byname ALIAS FOR \$4;
+os_c_last ALIAS FOR \$5;
+out_os_c_id INTEGER;
+out_os_c_last VARCHAR;
+os_c_first VARCHAR;
+os_c_middle VARCHAR;
+os_c_balance NUMERIC;
+os_o_id INTEGER;
+os_entdate TIMESTAMP;
+os_o_carrier_id INTEGER;
+os_ol RECORD;
+namecnt INTEGER;
+c_name CURSOR FOR
+SELECT c_balance, c_first, c_middle, c_id
+FROM customer
+WHERE c_last = os_c_last AND c_d_id = os_d_id AND c_w_id = os_w_id
+ORDER BY c_first;
+BEGIN
+IF ( byname = 1 )
+THEN
+SELECT count(c_id) INTO namecnt
+FROM customer
+WHERE c_last = os_c_last AND c_d_id = os_d_id AND c_w_id = os_w_id;
+IF ( MOD (namecnt, 2) = 1 )
+THEN
+namecnt := (namecnt + 1);
+END IF;
+OPEN c_name;
+FOR loop_counter IN 0 .. cast((namecnt/2) AS INTEGER)
+LOOP
+FETCH c_name
+INTO os_c_balance, os_c_first, os_c_middle, os_c_id;
+END LOOP;
+close c_name;
+ELSE
+SELECT c_balance, c_first, c_middle, c_last
+INTO os_c_balance, os_c_first, os_c_middle, os_c_last
+FROM customer
+WHERE c_id = os_c_id AND c_d_id = os_d_id AND c_w_id = os_w_id;
+END IF;
+SELECT o_id, o_carrier_id, o_entry_d
+INTO os_o_id, os_o_carrier_id, os_entdate
+FROM
+(SELECT o_id, o_carrier_id, o_entry_d
+FROM orders where o_d_id = os_d_id AND o_w_id = os_w_id and o_c_id=os_c_id
+ORDER BY o_id DESC) AS SUBQUERY
+LIMIT 1;
+FOR os_ol IN
+SELECT ol_i_id, ol_supply_w_id, ol_quantity, ol_amount, ol_delivery_d, out_os_c_id, out_os_c_last, os_c_first, os_c_middle, os_c_balance, os_o_id, os_entdate, os_o_carrier_id
+FROM order_line
+WHERE ol_o_id = os_o_id AND ol_d_id = os_d_id AND ol_w_id = os_w_id
+LOOP
+RETURN NEXT os_ol;
+END LOOP;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+psql $1 << EOF
+CREATE OR REPLACE FUNCTION PAYMENT (INTEGER, INTEGER, INTEGER, INTEGER, NUMERIC, INTEGER, NUMERIC, VARCHAR, VARCHAR, NUMERIC ) RETURNS INTEGER AS '
+DECLARE
+p_w_id ALIAS FOR \$1;
+p_d_id ALIAS FOR \$2;
+p_c_w_id ALIAS FOR \$3;
+p_c_d_id ALIAS FOR \$4;
+p_c_id_in ALIAS FOR \$5;
+byname ALIAS FOR \$6;
+p_h_amount ALIAS FOR \$7;
+p_c_last_in	 ALIAS FOR \$8;
+p_c_credit_in ALIAS FOR \$9;
+p_c_balance_in ALIAS FOR \$10;
+p_c_balance NUMERIC(12, 2);
+p_c_credit CHAR(2);
+p_c_last VARCHAR(16);
+p_c_id NUMERIC(5,0);
+p_w_street_1 VARCHAR(20);
+p_w_street_2 VARCHAR(20);
+p_w_city VARCHAR(20);
+p_w_state CHAR(2);
+p_w_zip CHAR(9);
+p_d_street_1 VARCHAR(20);
+p_d_street_2 VARCHAR(20);
+p_d_city VARCHAR(20);
+p_d_state CHAR(2);
+p_d_zip CHAR(9);
+p_c_first VARCHAR(16);
+p_c_middle CHAR(2);
+p_c_street_1 VARCHAR(20);
+p_c_street_2 VARCHAR(20);
+p_c_city VARCHAR(20);
+p_c_state CHAR(2);
+p_c_zip CHAR(9);
+p_c_phone CHAR(16);
+p_c_since TIMESTAMP;
+p_c_credit_lim NUMERIC(12, 2);
+p_c_discount NUMERIC(4, 4);
+p_c_data VARCHAR(500);
+tstamp TIMESTAMP;
+namecnt INTEGER;
+p_d_name VARCHAR(11);
+p_w_name VARCHAR(11);
+p_c_new_data VARCHAR(500);
+h_data VARCHAR(30);
+returning1 NUMERIC;
+returning2 NUMERIC;
+returning3 NUMERIC;
+returning4 NUMERIC;
+c_byname CURSOR FOR
+SELECT c_first, c_middle, c_id,
+c_street_1, c_street_2, c_city, c_state, c_zip,
+c_phone, c_credit, c_credit_lim,
+c_discount, c_balance, c_since
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_last = p_c_last
+ORDER BY c_first;
+BEGIN
+p_c_balance := p_c_balance_in;
+p_c_id := p_c_id_in;
+p_c_last := p_c_last_in;
+p_c_credit := p_c_credit_in;
+tstamp := current_timestamp;
+UPDATE warehouse SET w_ytd = w_ytd + p_h_amount
+WHERE w_id = p_w_id RETURNING w_ytd INTO returning1;
+SELECT w_street_1, w_street_2, w_city, w_state, w_zip, w_name
+INTO p_w_street_1, p_w_street_2, p_w_city, p_w_state, p_w_zip, p_w_name
+FROM warehouse
+WHERE w_id = p_w_id;
+UPDATE district SET d_ytd = d_ytd + p_h_amount
+WHERE d_w_id = p_w_id AND d_id = p_d_id RETURNING d_ytd INTO returning2;
+SELECT d_street_1, d_street_2, d_city, d_state, d_zip, d_name
+INTO p_d_street_1, p_d_street_2, p_d_city, p_d_state, p_d_zip, p_d_name
+FROM district
+WHERE d_w_id = p_w_id AND d_id = p_d_id;
+IF ( byname = 1 )
+THEN
+SELECT count(c_id) INTO namecnt
+FROM customer
+WHERE c_last = p_c_last AND c_d_id = p_c_d_id AND c_w_id = p_c_w_id;
+OPEN c_byname;
+IF ( MOD (namecnt, 2) = 1 )
+THEN
+namecnt := (namecnt + 1);
+END IF;
+FOR loop_counter IN 0 .. cast((namecnt/2) AS INTEGER)
+LOOP
+FETCH c_byname
+INTO p_c_first, p_c_middle, p_c_id, p_c_street_1, p_c_street_2, p_c_city,
+p_c_state, p_c_zip, p_c_phone, p_c_credit, p_c_credit_lim, p_c_discount, p_c_balance, p_c_since;
+END LOOP;
+CLOSE c_byname;
+ELSE
+SELECT c_first, c_middle, c_last,
+c_street_1, c_street_2, c_city, c_state, c_zip,
+c_phone, c_credit, c_credit_lim,
+c_discount, c_balance, c_since
+INTO p_c_first, p_c_middle, p_c_last,
+p_c_street_1, p_c_street_2, p_c_city, p_c_state, p_c_zip,
+p_c_phone, p_c_credit, p_c_credit_lim,
+p_c_discount, p_c_balance, p_c_since
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_id = p_c_id;
+END IF;
+p_c_balance := ( p_c_balance + p_h_amount );
+IF p_c_credit = ''BC''
+THEN
+ SELECT c_data INTO p_c_data
+FROM customer
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND c_id = p_c_id;
+h_data := p_w_name || '' '' || p_d_name;
+p_c_new_data := (p_c_id || '' '' || p_c_d_id || '' '' || p_c_w_id || '' '' || p_d_id || '' '' || p_w_id || '' '' || TO_CHAR(p_h_amount,''9999.99'') || TO_CHAR(tstamp,''YYYYMMDDHH24MISS'') || h_data);
+p_c_new_data := substr(CONCAT(p_c_new_data,p_c_data),1,500-(LENGTH(p_c_new_data)));
+UPDATE customer
+SET c_balance = p_c_balance, c_data = p_c_new_data
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND
+c_id = p_c_id RETURNING c_balance INTO returning3;
+ELSE
+UPDATE customer SET c_balance = p_c_balance
+WHERE c_w_id = p_c_w_id AND c_d_id = p_c_d_id AND
+c_id = p_c_id RETURNING c_balance INTO returning4;
+END IF;
+h_data := p_w_name || '' '' || p_d_name;
+INSERT INTO history (h_c_d_id, h_c_w_id, h_c_id, h_d_id,
+h_w_id, h_date, h_amount, h_data)
+VALUES (p_c_d_id, p_c_w_id, p_c_id, p_d_id,
+p_w_id, tstamp, p_h_amount, h_data);
+RETURN p_c_id;
+EXCEPTION
+WHEN serialization_failure OR deadlock_detected OR no_data_found
+THEN ROLLBACK;
+END;
+' LANGUAGE 'plpgsql';
+EOF
+}
+
+TPCC_CREATE_INDEX(){
+	psql $1 << EOF
+CREATE UNIQUE INDEX CUSTOMER_I2 ON CUSTOMER (C_W_ID, C_D_ID, C_LAST, C_FIRST, C_ID);
+CREATE UNIQUE INDEX ORDERS_I2 ON ORDERS (O_W_ID, O_D_ID, O_C_ID, O_ID);
+EOF
+}
+
+CHANGE_BUILD_TPCC(){
+	sed -i "25,27d" ../../../test/heap_rocksdb/build_tpcc.tcl
+	sed -i "24a diset tpcc pg_user ${1}\ndiset tpcc pg_pass ${1}\ndiset tpcc pg_dbase ${1}" ../../../test/heap_rocksdb/build_tpcc.tcl
+	sed -i "20,21d" ../../../test/heap_rocksdb/build_tpcc.tcl
+	sed -i "19a diset tpcc pg_count_ware ${2}\ndiset tpcc pg_num_vu ${3}" ../../../test/heap_rocksdb/build_tpcc.tcl
+}
+
+CHANGE_RUN_TPCC(){
+	sed -i "26,28d" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+	sed -i "25a diset tpcc pg_user ${1}\ndiset tpcc pg_pass ${1}\ndiset tpcc pg_dbase ${1}" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+	sed -i "37d" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+	sed -i "36a vuset vu ${2}" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+	sed -i "40d" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+	sed -i "39a runtimer ${3}" ../../../test/heap_rocksdb/runvu_tpcc.tcl
+}
+
+CREATE_DATABASE_FOR_TPCC(){
+	# $1 heap rocksdb etc
+	# $2 size
+	# $3 vucount
+	count=0
+	set +e
+	while [[ "${count}" != "${2}0" ]]
+	do
+		INFO "TPCC ${1} DATABASE BUILDING..."
+
+
+		psql -d ${DEFAULTDB} -c "ALTER USER ${USERNAME} WITH PASSWORD '${USERNAME}'"
+		psql -d ${DEFAULTDB} -c "DROP DATABASE tpcc${1}"
+		psql -d ${DEFAULTDB} -c "DROP USER tpcc${1}"
+
+
+		mv ${hammerdbtest}/pgoltp.tcl ${hammerdbtest}/pgoltp_old.tcl
+		cp ${hammerdbtest}/testoltp/pgoltp${1}.tcl ${hammerdbtest}/pgoltp.tcl
+
+		cd ${hammerdbsrc}
+		REPLACE ../../../test/heap_rocksdb/build_tpcc.tcl
+		CHANGE_BUILD_TPCC "tpcc${1}" ${2} ${3}
+		./hammerdbcli <<EEOOFF
+source ../../../test/heap_rocksdb/build_tpcc.tcl
+EEOOFF
+		count=$(psql -d tpcc${1} -c 'SELECT COUNT(*) FROM district' | awk 'NR==3{print$1}')
+	done
+
+	if [[ "$1" == "rocksdb" ]]
+	then
+		INSERT_FUNCTION "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "dta" ]]
+	then
+		INSERT_FUNCTION "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "sss" ]]
+	then
+		INSERT_FUNCTION "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "ss" ]]
+	then
+		INSERT_FUNCTION "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "crr" ]]
+	then
+		INSERT_FUNCTION "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "focc" ]]
+	then
+		INSERT_FUNCTION_OCC "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	elif [[ "$1" == "bocc" ]]
+	then
+		INSERT_FUNCTION_OCC "tpcc${1}"
+		# TPCC_CREATE_INDEX "tpcc${1}"
+	fi
+
+	mv ${hammerdbtest}/pgoltp_old.tcl ${hammerdbtest}/pgoltp.tcl
+	INFO "TPCC ${1} DATABASE BUILDING COMPLETE."
+	set -e
+}
+
+CACULATE_ROLLBACK(){
+	sleep 1
+	# subdir=$(ls $DATAHOME/gpmaster)
+	# cd ${gpsrc}
+	# ./caculate_rollback_rate.sh $DATAHOME/gpmaster/$subdir/pg_log $1 $2 >>
+	# for seg in ${all_node_list[@]}
+	# do
+	# 	subdir=$(ssh ${seg} "ls $DATAHOME/gpdatap")
+	# 	ssh ${seg} "cd "
+	# done
+}
+
+RUN_PGBENCH_TEST(){
+	# $1 for object type, heap focc sss etc.
+	# $2 for test type, tpcb select update.
+	for var in ${numberoftpcbthread[@]}
+	do
+		INFO "$2-$1-${var} start..."
+		if [[ "$1" == "crdb" ]]
+		then
+			START_MONITOR "$2-$1-${var}" 20 10
+		else
+			START_MONITOR "$2-$1-${var}" 20 10 penguindb
+		fi
+		if [[ "${PGBENCH_LOCALE}" ]]
+		then
+			if [[ "$2" == "tpcb" ]]
+			then
+				if [[ "$1" == "focc" ]]
+				then
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=tpcb$1; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -O -h gp-master -p ${PORT} -U ${USERNAME} >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				elif [[ "$1" == "bocc" ]]
+				then
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=tpcb$1; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -O -h gp-master -p ${PORT} -U ${USERNAME} >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				elif [[ "$1" == "crdb" ]]
+				then
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=defaultdb; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -N -h ${leader_ip} -p ${CPORT} -U root >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				else
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=tpcb$1; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -N -h gp-master -p ${PORT} -U ${USERNAME} >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				fi
+			elif [[ "$2" == "select" ]]
+			then
+				if [[ "$1" == "crdb" ]]
+				then
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=defaultdb; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -S -h ${leader_ip} -p ${CPORT} -U root >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				else
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=tpcb$1; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -S -h gp-master -p ${PORT} -U ${USERNAME} >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				fi
+			elif [[ "$2" == "update" ]]
+			then
+				if [[ "$1" == "crdb" ]]
+				then
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=defaultdb; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -f ${gpsrc}/contrib/pgbench/sysbench/update-only.sql -h ${leader_ip} -p ${CPORT} -U root >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				else
+					ssh ${PGBENCH_LOCALE} ". ${gpcpbin}/gpdb/greenplum_path.sh; export PGDATABASE=tpcb$1; pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -f ${gpsrc}/contrib/pgbench/sysbench/update-only.sql -h gp-master -p ${PORT} -U ${USERNAME} >> ${HOME}/$2-$1-${dirtimestamp}-${var}"
+				fi
+			fi
+		else
+			export PGDATABASE=tpcb$1
+			if [[ "$2" == "tpcb" ]]
+			then
+				if [[ "$1" == "focc" ]]
+				then
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -O >> ${curResult}/$2-$1-${var}
+				elif [[ "$1" == "bocc" ]]
+				then
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -O >> ${curResult}/$2-$1-${var}
+				elif [[ "$1" == "crdb" ]]
+				then
+					export PGDATABASE=defaultdb
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -N -h ${leader_ip} -p ${CPORT} -U root >> ${curResult}/$2-$1-${var}
+				else
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -N >> ${curResult}/$2-$1-${var}
+				fi
+			elif [[ "$2" == "select" ]]
+			then
+				if [[ "$1" == "crdb" ]]
+				then
+					export PGDATABASE=defaultdb
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -S -h ${leader_ip} -p ${CPORT} -U root >> ${curResult}/$2-$1-${var}
+				else
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -S >> ${curResult}/$2-$1-${var}
+				fi
+			elif [[ "$2" == "update" ]]
+			then
+				if [[ "$1" == "crdb" ]]
+				then
+					export PGDATABASE=defaultdb
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -f ${gpsrc}/contrib/pgbench/sysbench/update-only.sql -h ${leader_ip} -p ${CPORT} -U root >> ${curResult}/$2-$1-${var}
+				else
+					pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -f ${gpsrc}/contrib/pgbench/sysbench/update-only.sql >> ${curResult}/$2-$1-${var}
+				fi
+			fi
+		fi
+		if [[ "$1" == "crdb" ]]
+		then
+			STOP_MONITOR "$2-$1-${var}"
+		else
+			STOP_MONITOR "$2-$1-${var}" penguindb
+		fi
+		INFO "$2-$1-${var} stop."
+	done
+
+	if [[ "${PGBENCH_LOCALE}" ]]
+	then
+		scp ${PGBENCH_LOCALE}:${HOME}/$2-$1-${dirtimestamp}-${var} ${curResult}/$2-$1-${var}
+	fi
+}
+
+CHECK_TPCC_RUNNING(){
+	# $2 is test type
+	# $3 is thread
+	if [[ -n "$(ps -aux | grep 'con' | grep ${USERNAME} | grep ${1} | grep -v grep | grep -v 'ssh -f')" ]]
+	then
+		RESTART_CLUSTER
+	fi
+	cat ${curResult}/tpcc-${2}-${3} | grep "${3} Active"
+	return $?
+}
+
+TPCC_CHECK_SIZE(){
+	count=$(psql -d tpcc${1} -c 'SELECT COUNT(*) FROM district' | awk 'NR==3{print$1}')
+	if [[ ${count} != "${2}0" ]]
+	then
+		CREATE_DATABASE_FOR_TPCC ${1} ${2} ${3}
+	fi
+}
+
+RUN_TPCC_TEST(){
+	set +e
+	# $1 for object type, heap focc sss etc.
+	mv ${hammerdbtest}/pgoltp.tcl ${hammerdbtest}/pgoltp_old.tcl
+	cp ${hammerdbtest}/testoltp/pgoltp${1}.tcl ${hammerdbtest}/pgoltp.tcl
+	INFO "TPCC-${1} start..."
+	cd ${hammerdbsrc}
+	REPLACE ../../../test/heap_rocksdb/runvu_tpcc.tcl
+
+	for var in ${numberoftpccthread[@]}
+	do
+		retry=""
+		while [[ ! -n "${retry}" ]]
+		do
+			TPCC_CHECK_SIZE ${1} ${2} ${3}
+			INFO "TPCC-${1}-${var} start..."
+			START_MONITOR "tpcc-${1}-"${var} 40 20 penguindb
+			CHANGE_RUN_TPCC "tpcc${1}" ${var} 2400
+			./hammerdbcli >> ${curResult}/tpcc-${1}-${var} 2>&1 <<EEOOFF
+source ../../../test/heap_rocksdb/runvu_tpcc.tcl
+EEOOFF
+			STOP_MONITOR "tpcc-${1}-"${var} penguindb
+			retry=$(CHECK_TPCC_RUNNING "tpcc${1}" "${1}" ${var})
+		done
+		INFO "TPCC-${1}-$var stop."
+	done
+
+	INFO "TPCC-${1} stop."
+
+	mv ${hammerdbtest}/pgoltp_old.tcl ${hammerdbtest}/pgoltp.tcl
+	set -e
+}
+
+DRAW_TEST_PICTURE2(){
+	set +e
+	# $1 for test type, tpcc, tpcb, select etc.
+	# $2 $3 for two test object, heap & rocksdb
+	cd ${curResult}
+	if [[ "$1" == "ycsb" ]]
+	then
+		touch tmp-$1-index
+		rm -rf tmp-$1-index
+		for var in ${numberofycsbthread[@]}
+		do
+			echo ${var} >> tmp-$1-index
+		done
+		for name in $2 $3
+		do
+			cat $1-${name} | grep Throughput | awk '{print $3}' > tmp-$1-${name}-throughput
+			paste tmp-$1-index tmp-$1-${name}-throughput > tmp-$1-${name}-throughput-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberofycsbthread[${ycsblastindex}]}]
+set logscale x
+set ylabel \"throughput(ops/sec)\"
+set title \"$1 test(throughput) for $2, $3\"
+set xtics (" > draw-for-$1-test-throughput-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${ycsblastindex1})
+		do
+			str=${str}"\"${numberofycsbthread[${var}]}\" ${numberofycsbthread[${var}]},"
+		done
+		str=${str}"\"${numberofycsbthread[${ycsblastindex}]}\" ${numberofycsbthread[${ycsblastindex}]}"
+		echo ${str}")
+set output \"$1-test-throughput-for-$2-$3.png\"
+plot \"tmp-$1-$2-throughput-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-throughput-result\" using 1:2 title \"$3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-throughput-for-$2-$3.plt
+		gnuplot draw-for-$1-test-throughput-for-$2-$3.plt
+	elif [[ "$1" == "tpcc" ]]
+	then
+		touch tmp-$1-index
+		rm -rf tmp-$1-index
+		for var in ${numberoftpccthread[@]}
+		do
+			echo ${var} >> tmp-$1-index
+		done
+		for name in $2 $3
+		do
+			for var in ${numberoftpccthread[@]}
+			do
+				cat $1-${name}-${var} | grep TPM | awk '{print $7}' >> tmp-$1-${name}-tpm
+				cat $1-${name}-${var} | grep TPM | awk '{print $11}' >> tmp-$1-${name}-nopm
+			done
+			paste tmp-$1-index tmp-$1-${name}-tpm > tmp-$1-${name}-tpm-result
+			paste tmp-$1-index tmp-$1-${name}-nopm > tmp-$1-${name}-nopm-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"tpm\"
+set title \"$1 test(tpm) for $2, $3\"
+set xtics (" > draw-for-$1-test-tpm-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-tpm-for-$2-$3.png\"
+plot \"tmp-$1-$2-tpm-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-tpm-result\" using 1:2 title \"$3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-tpm-for-$2-$3.plt
+		gnuplot draw-for-$1-test-tpm-for-$2-$3.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"nopm\"
+set title \"$1 test(nopm) for $2, $3\"
+set xtics (" > draw-for-$1-test-nopm-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-nopm-for-$2-$3.png\"
+plot \"tmp-$1-$2-nopm-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-nopm-result\" using 1:2 title \"$3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-nopm-for-$2-$3.plt
+		gnuplot draw-for-$1-test-nopm-for-$2-$3.plt
+		cd ${curResult}/metric
+	for node in ${all_node_list[@]}
+	do
+		cd ${curResult}/metric/on_${node}
+		touch tmp-index
+		rm -rf tmp-index
+		for var in ${numberoftpccthread[@]}
+		do
+			echo ${var} >> tmp-index
+		done
+		for name in $2 $3
+		do
+			for var in ${numberoftpccthread[@]}
+			do
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}') | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuload
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}') | awk '{print $8}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}') | grep ${DN} | awk '{print $7}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-diskusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $3}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $1}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage-1
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $5}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-r
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $6}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-t
+				fi
+			done
+			paste tmp-index tmp-$1-${name}-cpuload > tmp-$1-${name}-cpuload-result
+			paste tmp-index tmp-$1-${name}-cpuusage > tmp-$1-${name}-cpuusage-result
+			paste tmp-index tmp-$1-${name}-diskusage > tmp-$1-${name}-diskusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage > tmp-$1-${name}-memoryusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage-1 > tmp-$1-${name}-memoryusage-1-result
+			paste tmp-index tmp-$1-${name}-networkusage-r > tmp-$1-${name}-networkusage-r-result
+			paste tmp-index tmp-$1-${name}-networkusage-t > tmp-$1-${name}-networkusage-t-result
+		done
+	done
+	cd ${curResult}
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"cpu load avg\"
+set title \"$1 test(cpu load avg) for $2, $3\"
+set xtics (" > draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-load-avg-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg3\" w lines,
+set key box
+set output
+" >> draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+	gnuplot draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"cpu idle\"
+set title \"$1 test(cpu idle) for $2, $3\"
+set xtics (" > draw-for-$1-test-cpu-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-usage-for-$2-$3.plt
+	gnuplot draw-for-$1-test-cpu-usage-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"disk usage\"
+set title \"$1 test(disk usage) for $2, $3\"
+set xtics (" > draw-for-$1-test-disk-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-disk-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-disk-usage-for-$2-$3.plt
+	gnuplot draw-for-$1-test-disk-usage-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"memory usage(%)\"
+set title \"$1 test(memory usage(%)) for $2, $3\"
+set xtics (" > draw-for-$1-test-memory-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-for-$2-$3.plt
+	gnuplot draw-for-$1-test-memory-usage-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"memory usage\"
+set title \"$1 test(memory usage) for $2, $3\"
+set xtics (" > draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-1-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+	gnuplot draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"network receive\"
+set title \"$1 test(network receive) for $2, $3\"
+set xtics (" > draw-for-$1-test-network-receive-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-receive-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-receive-for-$2-$3.plt
+	gnuplot draw-for-$1-test-network-receive-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"network transmit\"
+set title \"$1 test(network transmit) for $2, $3\"
+set xtics (" > draw-for-$1-test-network-transmit-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-transmit-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-transmit-for-$2-$3.plt
+	gnuplot draw-for-$1-test-network-transmit-for-$2-$3.plt
+	else
+		for name in $2 $3
+		do
+			# cat $1-${name} | grep 'number of clients:' | awk '{print $4}' > tmp-$1-${name}-index
+			# cat $1-${name} | grep 'excluding connections establishing' | awk '{print $3}' > tmp-$1-${name}
+			# cat $1-${name} | grep 'latency average:' | awk '{print $3}' > tmp-$1-${name}-latency
+			for var in ${numberoftpcbthread[@]}
+			do
+				cat $1-${name}-${var} | grep 'number of clients:' | awk '{print $4}' >> tmp-$1-${name}-index
+				cat $1-${name}-${var} | grep 'excluding connections establishing' | awk '{print $3}' >> tmp-$1-${name}
+				cat $1-${name}-${var} | grep 'latency average:' | awk '{print $3}' >> tmp-$1-${name}-latency
+			done
+
+			paste tmp-$1-${name}-index tmp-$1-${name} > tmp-$1-${name}-result
+			paste tmp-$1-${name}-index tmp-$1-${name}-latency > tmp-$1-${name}-latency-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"tps\"
+set title \"$1 test for $2, $3\"
+set xtics (" > draw-for-$1-test-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-for-$2-$3.png\"
+plot \"tmp-$1-$2-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-result\" using 1:2 title \"$3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-for-$2-$3.plt
+		gnuplot draw-for-$1-test-for-$2-$3.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"latency(ms)\"
+set title \"$1 test(latency) for $2, $3\"
+set xtics (" > draw-for-$1-test-latency-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-latency-for-$2-$3.png\"
+plot \"tmp-$1-$2-latency-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-latency-result\" using 1:2 title \"$3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-latency-for-$2-$3.plt
+		gnuplot draw-for-$1-test-latency-for-$2-$3.plt
+		cd ${curResult}/metric
+	for node in ${all_node_list[@]}
+	do
+		cd ${curResult}/metric/on_${node}
+		touch tmp-index
+		rm -rf tmp-index
+		for var in ${numberoftpcbthread[@]}
+		do
+			echo ${var} >> tmp-index
+		done
+		for name in $2 $3
+		do
+			for var in ${numberoftpcbthread[@]}
+			do
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}') | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuload
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}') | awk '{print $8}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}') | grep ${DN} | awk '{print $7}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-diskusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $3}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $1}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage-1
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $5}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-r
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $6}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-t
+				fi
+			done
+			paste tmp-index tmp-$1-${name}-cpuload > tmp-$1-${name}-cpuload-result
+			paste tmp-index tmp-$1-${name}-cpuusage > tmp-$1-${name}-cpuusage-result
+			paste tmp-index tmp-$1-${name}-diskusage > tmp-$1-${name}-diskusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage > tmp-$1-${name}-memoryusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage-1 > tmp-$1-${name}-memoryusage-1-result
+			paste tmp-index tmp-$1-${name}-networkusage-r > tmp-$1-${name}-networkusage-r-result
+			paste tmp-index tmp-$1-${name}-networkusage-t > tmp-$1-${name}-networkusage-t-result
+		done
+	done
+	cd ${curResult}
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"cpu load avg\"
+set title \"$1 test(cpu load avg) for $2, $3\"
+set xtics (" > draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-load-avg-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg3\" w lines,
+set key box
+set output
+" >> draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+		gnuplot draw-for-$1-test-cpu-load-avg-for-$2-$3.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"cpu idle\"
+set title \"$1 test(cpu idle) for $2, $3\"
+set xtics (" > draw-for-$1-test-cpu-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-usage-for-$2-$3.plt
+		gnuplot draw-for-$1-test-cpu-usage-for-$2-$3.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"disk usage\"
+set title \"$1 test(disk usage) for $2, $3\"
+set xtics (" > draw-for-$1-test-disk-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-disk-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-disk-usage-for-$2-$3.plt
+		gnuplot draw-for-$1-test-disk-usage-for-$2-$3.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"memory usage(%)\"
+set title \"$1 test(memory usage(%)) for $2, $3\"
+set xtics (" > draw-for-$1-test-memory-usage-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-for-$2-$3.plt
+	gnuplot draw-for-$1-test-memory-usage-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"memory usage\"
+set title \"$1 test(memory usage) for $2, $3\"
+set xtics (" > draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-1-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+	gnuplot draw-for-$1-test-memory-usage-1-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"network receive\"
+set title \"$1 test(network receive) for $2, $3\"
+set xtics (" > draw-for-$1-test-network-receive-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-receive-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-receive-for-$2-$3.plt
+	gnuplot draw-for-$1-test-network-receive-for-$2-$3.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"network transmit\"
+set title \"$1 test(network transmit) for $2, $3\"
+set xtics (" > draw-for-$1-test-network-transmit-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-transmit-for-$2-$3.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-transmit-for-$2-$3.plt
+	gnuplot draw-for-$1-test-network-transmit-for-$2-$3.plt
+	fi
+	set -e
+}
+
+DRAW_TEST_PICTURE3(){
+	# $1 for test type, tpcc, tpcb, select etc.
+	# $2 $3 $4 for three test object, sss ss crr
+	set +e
+	cd ${curResult}
+	if [[ "$1" == "ycsb" ]]
+	then
+		touch tmp-$1-index
+		rm -rf tmp-$1-index
+		for var in ${numberofycsbthread[@]}
+		do
+			echo ${var} >> tmp-$1-index
+		done
+		for name in $2 $3 $4
+		do
+			cat $1-${name} | grep Throughput | awk '{print $3}' > tmp-$1-${name}-throughput
+			paste tmp-$1-index tmp-$1-${name}-throughput > tmp-$1-${name}-throughput-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberofycsbthread[${ycsblastindex}]}]
+set logscale x
+set ylabel \"throughput(ops/sec)\"
+set title \"$1 test(throughput) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-throughput-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${ycsblastindex1})
+		do
+			str=${str}"\"${numberofycsbthread[${var}]}\" ${numberofycsbthread[${var}]},"
+		done
+		str=${str}"\"${numberofycsbthread[${ycsblastindex}]}\" ${numberofycsbthread[${ycsblastindex}]}"
+		echo ${str}")
+set output \"$1-test-throughput-for-$2-$3-$4.png\"
+plot \"tmp-$1-$2-throughput-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-throughput-result\" using 1:2 title \"$3\" w lines, \"tmp-$1-$4-throughput-result\" using 1:2 title \"$4\" w lines
+set key box
+set output
+" >> draw-for-$1-test-throughput-for-$2-$3-$4.plt
+		gnuplot draw-for-$1-test-throughput-for-$2-$3-$4.plt
+	elif [[ "$1" == "tpcc" ]]
+	then
+		touch tmp-$1-index
+		rm -rf tmp-$1-index
+		for var in ${numberoftpccthread[@]}
+		do
+			echo ${var} >> tmp-$1-index
+		done
+		for name in $2 $3 $4
+		do
+			for var in ${numberoftpccthread[@]}
+			do
+				cat $1-${name}-${var} | grep TPM | awk '{print $7}' >> tmp-$1-${name}-tpm
+				cat $1-${name}-${var} | grep TPM | awk '{print $11}' >> tmp-$1-${name}-nopm
+			done
+			paste tmp-$1-index tmp-$1-${name}-tpm > tmp-$1-${name}-tpm-result
+			paste tmp-$1-index tmp-$1-${name}-nopm > tmp-$1-${name}-nopm-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"tpm\"
+set title \"$1 test(tpm) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-tpm-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-tpm-for-$2-$3-$4.png\"
+plot \"tmp-$1-$2-tpm-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-tpm-result\" using 1:2 title \"$3\" w lines, \"tmp-$1-$4-tpm-result\" using 1:2 title \"$4\" w lines
+set key box
+set output
+" >> draw-for-$1-test-tpm-for-$2-$3-$4.plt
+		gnuplot draw-for-$1-test-tpm-for-$2-$3-$4.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"nopm\"
+set title \"$1 test(nopm) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-nopm-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-nopm-for-$2-$3-$4.png\"
+plot \"tmp-$1-$2-nopm-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-nopm-result\" using 1:2 title \"$3\" w lines, \"tmp-$1-$4-nopm-result\" using 1:2 title \"$4\" w lines
+set key box
+set output
+" >> draw-for-$1-test-nopm-for-$2-$3-$4.plt
+		gnuplot draw-for-$1-test-nopm-for-$2-$3-$4.plt
+cd ${curResult}/metric
+	for node in ${all_node_list[@]}
+	do
+		cd ${curResult}/metric/on_${node}
+		touch tmp-index
+		rm -rf tmp-index
+		for var in ${numberoftpccthread[@]}
+		do
+			echo ${var} >> tmp-index
+		done
+		for name in $2 $3 $4
+		do
+			for var in ${numberoftpccthread[@]}
+			do
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}') | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuload
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}') | awk '{print $8}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}') | grep ${DN} | awk '{print $7}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-diskusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $3}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $1}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage-1
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $5}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-r
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $6}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-t
+				fi
+			done
+			paste tmp-index tmp-$1-${name}-cpuload > tmp-$1-${name}-cpuload-result
+			paste tmp-index tmp-$1-${name}-cpuusage > tmp-$1-${name}-cpuusage-result
+			paste tmp-index tmp-$1-${name}-diskusage > tmp-$1-${name}-diskusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage > tmp-$1-${name}-memoryusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage-1 > tmp-$1-${name}-memoryusage-1-result
+			paste tmp-index tmp-$1-${name}-networkusage-r > tmp-$1-${name}-networkusage-r-result
+			paste tmp-index tmp-$1-${name}-networkusage-t > tmp-$1-${name}-networkusage-t-result
+		done
+	done
+	cd ${curResult}
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"cpu load avg\"
+set title \"$1 test(cpu load avg) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-load-avg-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"cpu idle\"
+set title \"$1 test(cpu idle) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"disk usage\"
+set title \"$1 test(disk usage) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-disk-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"memory usage(%)\"
+set title \"$1 test(memory usage(%)) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"memory usage\"
+set title \"$1 test(memory usage) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-1-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"network receive\"
+set title \"$1 test(network receive) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-receive-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpccthread[$tpcclastindex]}]
+set logscale x
+set ylabel \"network transmit\"
+set title \"$1 test(network transmit) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcclastindex1})
+		do
+			str=${str}"\"${numberoftpccthread[${var}]}\" ${numberoftpccthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpccthread[${tpcclastindex}]}\" ${numberoftpccthread[${tpcclastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-transmit-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+	else
+		for name in $2 $3 $4
+		do
+			for var in ${numberoftpcbthread[@]}
+			do
+				cat $1-${name}-${var} | grep 'number of clients:' | awk '{print $4}' >> tmp-$1-${name}-index
+				cat $1-${name}-${var} | grep 'excluding connections establishing' | awk '{print $3}' >> tmp-$1-${name}
+				cat $1-${name}-${var} | grep 'latency average:' | awk '{print $3}' >> tmp-$1-${name}-latency
+			done
+			paste tmp-$1-${name}-index tmp-$1-${name} > tmp-$1-${name}-result
+			paste tmp-$1-${name}-index tmp-$1-${name}-latency > tmp-$1-${name}-latency-result
+		done
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"tps\"
+set title \"$1 test for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-for-$2-$3-$4.png\"
+plot \"tmp-$1-$2-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-result\" using 1:2 title \"$3\" w lines, \"tmp-$1-$4-result\" using 1:2 title \"$4\" w lines
+set key box
+set output
+" >> draw-for-$1-test-for-$2-$3-$4.plt
+		gnuplot draw-for-$1-test-for-$2-$3-$4.plt
+		echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"latency(ms)\"
+set title \"$1 test(latency) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-latency-for-$2-$3.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-latency-for-$2-$3-$4.png\"
+plot \"tmp-$1-$2-latency-result\" using 1:2 title \"$2\" w lines, \"tmp-$1-$3-latency-result\" using 1:2 title \"$3\" w lines, \"tmp-$1-$4-latency-result\" using 1:2 title \"$4\" w lines
+set key box
+set output
+" >> draw-for-$1-test-latency-for-$2-$3.plt
+		gnuplot draw-for-$1-test-latency-for-$2-$3.plt
+cd ${curResult}/metric
+	for node in ${all_node_list[@]}
+	do
+		cd ${curResult}/metric/on_${node}
+		touch tmp-index
+		rm -rf tmp-index
+		for var in ${numberoftpcbthread[@]}
+		do
+			echo ${var} >> tmp-index
+		done
+		for name in $2 $3 $4
+		do
+			for var in ${numberoftpcbthread[@]}
+			do
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuload | awk '{print $9}') | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuload
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep cpuusage | awk '{print $9}') | awk '{print $8}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-cpuusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep diskusage | awk '{print $9}') | grep ${DN} | awk '{print $7}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-diskusage
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $3}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep memoryusage | awk '{print $9}') | awk '{print $1}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-memoryusage-1
+				fi
+				if [[ "$(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}')" ]]
+				then
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $5}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-r
+					cat $(ls -alF | grep $1 | grep ${name} | grep "\-${var}_" | grep networkusage | awk '{print $9}') | grep ${NI} | awk '{print $6}' | awk '{sum+=$1}END{print sum/NR}' >> tmp-$1-${name}-networkusage-t
+				fi
+			done
+			paste tmp-index tmp-$1-${name}-cpuload > tmp-$1-${name}-cpuload-result
+			paste tmp-index tmp-$1-${name}-cpuusage > tmp-$1-${name}-cpuusage-result
+			paste tmp-index tmp-$1-${name}-diskusage > tmp-$1-${name}-diskusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage > tmp-$1-${name}-memoryusage-result
+			paste tmp-index tmp-$1-${name}-memoryusage-1 > tmp-$1-${name}-memoryusage-1-result
+			paste tmp-index tmp-$1-${name}-networkusage-r > tmp-$1-${name}-networkusage-r-result
+			paste tmp-index tmp-$1-${name}-networkusage-t > tmp-$1-${name}-networkusage-t-result
+		done
+	done
+	cd ${curResult}
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"cpu load avg\"
+set title \"$1 test(cpu load avg) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-load-avg-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuload-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuload-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-cpuload-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-cpu-load-avg-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"cpu idle\"
+set title \"$1 test(cpu idle) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-cpu-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-cpuusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-cpuusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-cpuusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-cpu-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"disk usage\"
+set title \"$1 test(disk usage) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-disk-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-diskusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-diskusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-diskusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-disk-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"memory usage(%)\"
+set title \"$1 test(memory usage(%)) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-memoryusage-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-memory-usage-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"memory usage\"
+set title \"$1 test(memory usage) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-memory-usage-1-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-memoryusage-1-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-memoryusage-1-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-memoryusage-1-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-memory-usage-1-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"network receive\"
+set title \"$1 test(network receive) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-receive-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-r-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-r-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-networkusage-r-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-network-receive-for-$2-$3-$4.plt
+	echo -n "set term pngcairo lw 2
+set xlabel \"number of thread\"
+set xrange [8:${numberoftpcbthread[$tpcblastindex]}]
+set logscale x
+set ylabel \"network transmit\"
+set title \"$1 test(network transmit) for $2, $3, $4\"
+set xtics (" > draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+str=''
+		for var in $(seq 0 ${tpcblastindex1})
+		do
+			str=${str}"\"${numberoftpcbthread[${var}]}\" ${numberoftpcbthread[${var}]},"
+		done
+		str=${str}"\"${numberoftpcbthread[${tpcblastindex}]}\" ${numberoftpcbthread[${tpcblastindex}]}"
+		echo ${str}")
+set output \"$1-test-network-transmit-for-$2-$3-$4.png\"
+plot \"${curResult}/metric/on_gp-master/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$2-networkusage-t-result\" using 1:2 title \"$2_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$3-networkusage-t-result\" using 1:2 title \"$3_gp-seg3\" w lines, \"${curResult}/metric/on_gp-master/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-master\" w lines, \"${curResult}/metric/on_gp-seg1/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg1\" w lines, \"${curResult}/metric/on_gp-seg2/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg2\" w lines, \"${curResult}/metric/on_gp-seg3/tmp-$1-$4-networkusage-t-result\" using 1:2 title \"$4_gp-seg3\" w lines
+set key box
+set output
+" >> draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+	gnuplot draw-for-$1-test-network-transmit-for-$2-$3-$4.plt
+	fi
+	set -e
+}
+
+MV_SEG_LOG(){
+	set +e
+	cd /data1/gptest/penguindb/gpdata/gpmaster/gpseg-1; mv pg_log /data1/gptest/penguindb/pg_log_${1}
+	ssh -f gp-seg1 "cd /data1/gptest/penguindb/gpdata/gpdatap/gpseg0; mv pg_log /data1/gptest/penguindb/pg_log_${1}"
+	ssh -f gp-seg2 "cd /data1/gptest/penguindb/gpdata/gpdatap/gpseg1; mv pg_log /data1/gptest/penguindb/pg_log_${1}"
+	set -e
+}
+
+HEAP_ROCKSDB_CREATE(){
+	if [[ ! "$TEST_TPCC" ]]
+	then
+		CHECK_LTS_EXIST
+		CREATE_HEAP_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		CREATE_ROCKSDB_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+	else
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "heap" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "rocksdb" $1 $2
+		RESTART_CLUSTER
+	fi
+}
+
+HEAP_ROCKSDB(){
+	if [[ "$TEST_SELECT" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST heap "select"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST rocksdb "select"
+		# RESTART_CLUSTER
+		sleep 10
+
+		DRAW_TEST_PICTURE2 "select" heap rocksdb
+	fi
+
+	if [[ "$TEST_UPDATE" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST heap "update"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST rocksdb "update"
+		# RESTART_CLUSTER
+		sleep 10
+
+		DRAW_TEST_PICTURE2 "update" heap rocksdb
+	fi
+
+	if [[ "$TEST_TPCB" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST heap "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST rocksdb "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+
+		DRAW_TEST_PICTURE2 "tpcb" heap rocksdb
+	fi
+
+	if [[ "$TEST_TPCC" ]]
+	then
+		set +e
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "heap" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "rocksdb" $1 $2
+		RESTART_CLUSTER
+		set -e
+
+		DRAW_TEST_PICTURE2 "tpcc" heap rocksdb
+	fi
+}
+
+OCC_CREATE(){
+	if [[ ! "$TEST_TPCC" ]]
+	then
+		CHECK_LTS_EXIST
+		CREATE_FOCC_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		CREATE_BOCC_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		CREATE_DTA_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+	else
+		set +e
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "focc" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "bocc" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "dta" $1 $2
+		RESTART_CLUSTER
+		set -e
+	fi
+}
+
+OCC(){
+	if [[ "$TEST_SELECT" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST focc "select"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST bocc "select"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST dta "select"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG occselect_${dirtimestamp}
+		DRAW_TEST_PICTURE3 "select" focc bocc dta
+	fi
+
+	if [[ "$TEST_UPDATE" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST focc "update"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST bocc "update"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST dta "update"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG occupdate_${dirtimestamp}
+		DRAW_TEST_PICTURE3 "update" focc bocc dta
+	fi
+
+	if [[ "$TEST_TPCB" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST focc "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST bocc "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST dta "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG occtpcb_${dirtimestamp}
+		DRAW_TEST_PICTURE3 "tpcb" focc bocc dta
+	fi
+
+	if [[ "$TEST_TPCC" ]]
+	then
+		set +e
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "focc" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "bocc" $1 $2
+		RESTART_CLUSTER
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "dta" $1 $2
+		RESTART_CLUSTER
+		set -e
+		MV_SEG_LOG occtpcc_${dirtimestamp}
+		DRAW_TEST_PICTURE3 "tpcc" focc bocc dta
+	fi
+}
+
+CON_CREATE(){
+	if [[ ! "$TEST_TPCC" ]]
+	then
+		CHECK_LTS_EXIST
+		CREATE_SSS_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		CREATE_SS_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		CREATE_CRR_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		sleep 10
+	else
+		set +e
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "sss" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "ss" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		CHECK_LTS_EXIST
+		CREATE_DATABASE_FOR_TPCC "crr" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		set -e
+	fi
+}
+
+CON(){
+	if [[ "$TEST_SELECT" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST sss "select"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST ss "select"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST crr "select"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG conselect_${dirtimestamp}
+
+		DRAW_TEST_PICTURE3 "select" sss ss crr
+	fi
+
+	if [[ "$TEST_UPDATE" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST sss "update"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST ss "update"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST crr "update"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG conupdate_${dirtimestamp}
+
+
+		DRAW_TEST_PICTURE3 "update" sss ss crr
+	fi
+
+	if [[ "$TEST_TPCB" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST sss "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST ss "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST crr "tpcb"
+		# RESTART_CLUSTER
+		sleep 10
+		MV_SEG_LOG contpcb_${dirtimestamp}
+
+		DRAW_TEST_PICTURE3 "tpcb" sss ss crr
+	fi
+
+	if [[ "$TEST_TPCC" ]]
+	then
+		set +e
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "sss" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "ss" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		CHECK_LTS_EXIST
+		RUN_TPCC_TEST "crr" $1 $2
+		RESTART_CLUSTER
+		# sleep 10
+		set -e
+		MV_SEG_LOG contpcc_${dirtimestamp}
+
+		DRAW_TEST_PICTURE3 "tpcc" sss ss crr
+	fi
+}
+
+WOOKONGDB_COCKROACH_CREATE(){
+	if [[ ! "$TEST_YCSB" ]]
+	then
+		CHECK_LTS_EXIST
+		CREATE_ROCKSDB_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER
+		CREATE_COCKROACHDB_DATABASE_FOR_TPCB
+		# RESTART_CLUSTER_COCKROACHDB
+	else
+		set +e
+		psql -d ${DEFAULTDB} -c "DROP DATABASE ycsbrr"
+		psql -d ${DEFAULTDB} -c "CREATE DATABASE ycsbrr"
+		psql -d ycsbrr -c "CREATE TABLE usertable (YCSB_KEY VARCHAR(255) PRIMARY KEY, FIELD0 VARCHAR(100), FIELD1 VARCHAR (100), FIELD2 VARCHAR (100), FIELD3 VARCHAR (100), FIELD4 VARCHAR (100), FIELD5 VARCHAR (100), FIELD6 VARCHAR (100), FIELD7 VARCHAR (100), FIELD8 VARCHAR (100), FIELD9 VARCHAR (100)) with(storage_engine=rocksdb)"
+		# psql -d ycsbsss -c "ALTER DATABASE ycsbsss SET transam_mode = 'rucc'"
+		# psql -d ycsbsss -c "ALTER DATABASE ycsbsss SET consistency_mode = 'default'"
+		cd ${YCSBPATH}
+		bin/ycsb.sh load jdbc -P workloads/workload${YCSB_TEST_TYPE} -p db.driver=org.postgresql.Driver -p db.url=jdbc:postgresql://${MASTER_IP}:${PORT}/ycsbrr?sslmode=disable -p db.user=${USERNAME} -p db.passwd= -p recordcount=${YCSB_RECORD_COUNT} -p operationcount=${YCSB_OPERATION_COUNT} -threads 100
+
+		cockroach sql --insecure --execute="DROP DATABASE ycsb CASCADE" --host=${leader_ip} --port=${CPORT} --user=root --database=defaultdb
+		cockroach sql --insecure --execute="CREATE DATABASE ycsb" --host=${leader_ip} --port=${CPORT} --user=root --database=defaultdb
+		cockroach sql --insecure --execute="CREATE TABLE usertable (YCSB_KEY VARCHAR(255) PRIMARY KEY, FIELD0 VARCHAR(100), FIELD1 VARCHAR (100), FIELD2 VARCHAR (100), FIELD3 VARCHAR (100), FIELD4 VARCHAR (100), FIELD5 VARCHAR (100), FIELD6 VARCHAR (100), FIELD7 VARCHAR (100), FIELD8 VARCHAR (100), FIELD9 VARCHAR (100))" --host=${leader_ip} --port=${CPORT} --user=root --database=ycsb
+		bin/ycsb.sh load jdbc -P workloads/workload${YCSB_TEST_TYPE} -p db.driver=org.postgresql.Driver -p db.url=jdbc:postgresql://${leader_ip}:${CPORT}/ycsb?sslmode=disable -p db.user=root -p db.passwd= -p recordcount=${YCSB_RECORD_COUNT} -p operationcount=${YCSB_OPERATION_COUNT} -threads 100
+		set -e
+	fi
+}
+
+WOOKONGDB_COCKROACH(){
+	if [[ "$TEST_SELECT" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST rocksdb "select"
+		# RESTART_CLUSTER
+		RUN_PGBENCH_TEST crdb "select"
+		# RESTART_CLUSTER_COCKROACHDB
+		DRAW_TEST_PICTURE2 "select" rocksdb crdb
+	fi
+
+	if [[ "$TEST_UPDATE" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST sss "update"
+		# RESTART_CLUSTER
+		RUN_PGBENCH_TEST crdb "update"
+		# RESTART_CLUSTER_COCKROACHDB
+		DRAW_TEST_PICTURE2 "update" sss crdb
+	fi
+
+	if [[ "$TEST_TPCB" ]]
+	then
+		CHECK_LTS_EXIST
+		RUN_PGBENCH_TEST sss "tpcb"
+		# RESTART_CLUSTER
+		RUN_PGBENCH_TEST crdb "tpcb"
+		# RESTART_CLUSTER_COCKROACHDB
+		DRAW_TEST_PICTURE2 "tpcb" sss crdb
+	fi
+
+	if [[ "$TEST_YCSB" ]]
+	then
+		cd ${YCSBPATH}
+		for var in ${numberofycsbthread[@]}
+		do
+			START_MONITOR "ycsb-rr-${var}" 20 50 penguindb
+			bin/ycsb.sh run jdbc -P workloads/workload${YCSB_TEST_TYPE} -p db.driver=org.postgresql.Driver -p db.url=jdbc:postgresql://${MASTER_IP}:${PORT}/ycsbrr?sslmode=disable -p db.user=${USERNAME} -p db.passwd= -p recordcount=${YCSB_RECORD_COUNT} -p operationcount=${YCSB_OPERATION_COUNT} -threads ${var} >> ${curResult}/ycsb-rr
+			STOP_MONITOR "ycsb-rr-${var}" penguindb
+		done
+		for var in ${numberofycsbthread[@]}
+		do
+			START_MONITOR "ycsb-crdb-${var}" 20 50
+			bin/ycsb.sh run jdbc -P workloads/workload${YCSB_TEST_TYPE} -p db.driver=org.postgresql.Driver -p db.url=jdbc:postgresql://${leader_ip}:${CPORT}/ycsb?sslmode=disable -p db.user=root -p db.passwd= -p recordcount=${YCSB_RECORD_COUNT} -p operationcount=${YCSB_OPERATION_COUNT} -threads ${var} >> ${curResult}/ycsb-crdb
+			STOP_MONITOR "ycsb-crdb-${var}"
+		done
+		DRAW_TEST_PICTURE2 "ycsb" sss crdb
+	fi
+}
+
+RUN_ALL_TEST_ON_GPDB(){
+	gpsrc="/data1/gptest/gpdb-6.1"
+	export PGDATABASE=${DEFAULTDB}
+	INFO "We are going to build Wookongdb from the source code under "${gpsrc}.
+	INFO "If this is not correct, please set gpsrc in ~/.bash_profile."
+
+	if [[ "$FIRST" ]]
+	then
+		rm -rf ${gptmp}
+		cp -r ${gpsrc} ${gptmp}
+	else
+		rm -rf ${gptmp}/src
+		cp -r ${gpsrc}/src ${gptmp}/
+	fi
+
+	cd ${gptmp}
+
+	if [[ "$DEBUG" ]]
+	then
+		INFO "compile in debug mode..."
+		if [[ "$ATRUC" ]]
+		then
+			./configure --prefix=${gpbin} --with-perl --with-python --with-libxml --disable-orca --enable-cassert --disable-pxf CFLAGS='-g3 -ggdb -O0 -fno-strict-aliasing -ldl -fno-omit-frame-pointer' CXXFLAGS='-std=c++11 -g3 -ggdb -O0 -fno-strict-aliasing -ldl -fno-omit-frame-pointer'
+		else
+			./configure --prefix=${gpbin} --with-perl --with-gssapi --with-python --with-libxml --with-includes=/usr/include --enable-debug --enable-cassert --disable-orca --without-zstd CFLAGS='-O0 -g3 -ggdb3 -fno-omit-frame-pointer'
+		fi
+	else
+		INFO "compile in release mode..."
+		if [[ "$ATRUC" ]]
+		then
+			./configure --prefix=${gpbin} --with-perl --with-python --with-libxml --disable-orca --disable-cassert --disable-pxf CFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -ldl -fno-omit-frame-pointer' CXXFLAGS='-std=c++11 -g3 -ggdb -O3 -fno-strict-aliasing -ldl -fno-omit-frame-pointer'
+		else
+			./configure --prefix=${gpbin} --with-perl --with-gssapi --with-python --with-libxml --with-includes=/usr/include --disable-cassert --disable-orca --disable-pxf --disable-gpfdisk --without-zstd CFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -fno-omit-frame-pointer' CXXFLAGS='-g3 -ggdb -O3 -fno-strict-aliasing -fno-omit-frame-pointer'
+		fi
+	fi
+
+	if [[ "$ATRUC" ]]
+	then
+		sed -i 's/LIBS = -lbz2 -lxml2 -lrt -lzstd -lz -lreadline -lrt -lcrypt -lm  -lcurl/LIBS = -lstdc++ -lprotobuf -lrocksdb -lbz2 -lxml2 -lrt -lz -lreadline -lrt -lcrypt -lm -lcurl -llz4 -lzstd -lsnappy -lpthread/g' ./src/Makefile.global
+	else
+		sed -i 's/LIBS = -lbz2 -lxml2 -lrt -lgssapi_krb5 -lz -lreadline -lrt -lcrypt -ldl -lm  -lcurl/LIBS = -lbz2 -lxml2 -lrt -lgssapi_krb5 -lz -lreadline -lrt -lcrypt -ldl -lm  -lcurl  -lzstd -llz4 -lsnappy -lpthread -lprotobuf -lrocksdb/g' ./src/Makefile.global
+	fi
+
+	make -j32 > /dev/null
+	make install > /dev/null
+	source ${gpbin}/greenplum_path.sh
+
+	for seg in ${segment_list[@]}
+	do
+		if [[ "$COPY_TMP" ]]
+		then
+			INFO "try to delete the old tmp code in ${seg}."
+			ssh ${seg} rm -rf ${gptmp}
+			INFO "delete complete."
+			INFO "try to copy the tmp code in ${seg}."
+			scp -rq ${gptmp} ${seg}:${gpcptmp}
+			INFO "copy done."
+		fi
+		INFO "try to delete the old bin in ${seg}."
+		ssh ${seg} rm -rf ${gpbin}
+		INFO "delete complete."
+		INFO "try to copy the bin in ${seg}."
+		scp -rq ${gpbin} ${seg}:${gpcpbin}
+		INFO "copy done."
+	done
+	DEPLOY_CLUSTER
+	INFO "TPCB GPDB DATABASE BUILDING..."
+	pgbench -i -s ${SIZE} -n -w ${WORKERS}
+	INFO "TPCB GPDB DATABASE BUILDING COMPLETE."
+	for var in ${numberoftpcbthread[@]}
+	do
+		INFO "SELECT-GPDB-${var} start..."
+		START_MONITOR "select-gpdb-"${var} 20 20
+		pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -S >> ${curResult}/select-gpdb
+		STOP_MONITOR "select-gpdb-"${var} penguindb
+		INFO "SELECT-GPDB-${var} stop."
+	done
+	for var in ${numberoftpcbthread[@]}
+	do
+		INFO "UPDATE-GPDB-${var} start..."
+		START_MONITOR "update-gpdb-"${var} 20 20
+		pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 -f ${gpsrc}/contrib/pgbench/sysbench/update-only.sql >> ${curResult}/update-gpdb
+		STOP_MONITOR "update-gpdb-"${var} penguindb
+		INFO "UPDATE-GPDB-${var} stop."
+	done
+	for var in ${numberoftpcbthread[@]}
+	do
+		INFO "TCPB-GPDB-${var} start..."
+		START_MONITOR "tpcb-gpdb-"${var} 20 20
+		pgbench -c ${var} -j ${var} -r -T 60 -n -P 1 >> ${curResult}/tpcb-gpdb
+		STOP_MONITOR "tpcb-gpdb-"${var} penguindb
+		INFO "TCPB-GPDB-${var} stop."
+	done
+}
+
+HTTP0_ADD_DELAY(){
+	psql -d ${1} -c "ALTER DATABASE ${1} SET http_delay = ${2}"
+}
+
+ROCKSDB_BACKWARD(){
+	set +e
+	psql -d penguindb -c "ALTER DATABASE ${1} SET rocksdb_scan_forward = ${2}"
+	set -e
+}
+
+ROLLBACK_COUNT(){
+	psql -d penguindb -c "ALTER DATABASE tpccsss SET dta_rollback_count = ${1}"
+	psql -d penguindb -c "ALTER DATABASE tpccss SET dta_rollback_count = ${1}"
+	psql -d penguindb -c "ALTER DATABASE tpcccrr SET dta_rollback_count = ${1}"
+}
+
+CON_MANY_SIZE(){
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# TEST_TPCB=""
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=1
+	# CON_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# CON 128 64
+	# sleep 5
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# TEST_TPCB=""
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=1
+	# CON_CREATE 256 128
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# CON 256 128
+	# sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	CON_CREATE 512 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	CON 512 64
+	sleep 5
+}
+OCC_MANY_SIZE(){
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 128 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 256 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 256 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 512 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 512 64
+	sleep 5
+}
+OCC_MANY_SIZE_FORWARD(){
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 128 64
+	ROCKSDB_BACKWARD tpccfocc 'forward'
+	ROCKSDB_BACKWARD tpccbocc 'forward'
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 256 64
+	ROCKSDB_BACKWARD tpccfocc 'forward'
+	ROCKSDB_BACKWARD tpccbocc 'forward'
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 256 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	OCC_CREATE 512 64
+	ROCKSDB_BACKWARD tpccfocc 'forward'
+	ROCKSDB_BACKWARD tpccbocc 'forward'
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 512 64
+	sleep 5
+}
+ALL_TPCB(){
+	#heap vs rocksdb 100
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	SIZE=100
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	HEAP_ROCKSDB_CREATE 128 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	HEAP_ROCKSDB 128 64
+	sleep 5
+	#occ 100
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# SIZE=100
+	# TEST_TPCB=1
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=""
+	# OCC_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# OCC 128 64
+	# sleep 5
+	#con 100
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# SIZE=100
+	# TEST_TPCB=1
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=""
+	# CON_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# CON 128 64
+	# sleep 5
+	#heap vs rocksdb 1000
+	# WORKERS=50
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# SIZE=1000
+	# TEST_TPCB=1
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=""
+	# HEAP_ROCKSDB_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# HEAP_ROCKSDB 128 64
+	# sleep 5
+	# #occ 1000
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# SIZE=1000
+	# TEST_TPCB=1
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=""
+	# OCC_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# OCC 128 64
+	# sleep 5
+	# #con 1000
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# SIZE=1000
+	# TEST_TPCB=1
+	# TEST_SELECT=""
+	# TEST_UPDATE=""
+	# TEST_TPCC=""
+	# CON_CREATE 128 64
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# CON 128 64
+	# sleep 5
+	# WORKERS=10
+}
+HR_TPCC(){
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=""
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=1
+	HEAP_ROCKSDB_CREATE 128 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	HEAP_ROCKSDB 128 64
+	sleep 5
+}
+CRDB_TEST(){
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# TEST_YCSB=""
+	# TEST_TPCB=1
+	# WOOKONGDB_COCKROACH_CREATE
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# WOOKONGDB_COCKROACH
+	# sleep 5
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# TEST_YCSB=1
+	# TEST_TPCB=""
+	# YCSB_TEST_TYPE="a"
+	# WOOKONGDB_COCKROACH_CREATE
+	# WOOKONGDB_COCKROACH
+	# sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_YCSB=1
+	TEST_TPCB=""
+	YCSB_TEST_TYPE="b"
+	WOOKONGDB_COCKROACH_CREATE
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	WOOKONGDB_COCKROACH
+	sleep 5
+	# export PGDATABASE=penguindb
+	# DEPLOY_CLUSTER
+	# TEST_YCSB=1
+	# TEST_TPCB=""
+	# YCSB_TEST_TYPE="c"
+	# WOOKONGDB_COCKROACH_CREATE
+	# dirtimestamp=$(date +"%m%d%H%M%S")
+	# curResult=${RESULT}"/test-"${dirtimestamp}
+	# mkdir -p ${curResult}
+	# WOOKONGDB_COCKROACH
+	# sleep 5
+}
+MANY_DELAY(){
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	CON_CREATE 128 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	CON 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	CON_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbsss 1
+	HTTP0_ADD_DELAY tpcbss 1
+	HTTP0_ADD_DELAY tpcbcrr 1
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	CON 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	CON_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbsss 3
+	HTTP0_ADD_DELAY tpcbss 3
+	HTTP0_ADD_DELAY tpcbcrr 3
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	CON 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	CON_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbsss 5
+	HTTP0_ADD_DELAY tpcbss 5
+	HTTP0_ADD_DELAY tpcbcrr 5
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	CON 128 64
+	sleep 5
+
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	OCC_CREATE 128 64
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	OCC_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbfocc 1
+	HTTP0_ADD_DELAY tpcbbocc 1
+	HTTP0_ADD_DELAY tpcbdta 1
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	OCC_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbfocc 3
+	HTTP0_ADD_DELAY tpcbbocc 3
+	HTTP0_ADD_DELAY tpcbdta 3
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+	export PGDATABASE=penguindb
+	DEPLOY_CLUSTER
+	TEST_TPCB=1
+	TEST_SELECT=""
+	TEST_UPDATE=""
+	TEST_TPCC=""
+	OCC_CREATE 128 64
+	HTTP0_ADD_DELAY tpcbfocc 5
+	HTTP0_ADD_DELAY tpcbbocc 5
+	HTTP0_ADD_DELAY tpcbdta 5
+	dirtimestamp=$(date +"%m%d%H%M%S")
+	curResult=${RESULT}"/test-"${dirtimestamp}
+	mkdir -p ${curResult}
+	OCC 128 64
+	sleep 5
+}
+main(){
+	if [[ "$RESTART" ]]
+	then
+		RESTART_CLUSTER
+	fi
+
+	if [[ "$COMPILE" ]]
+	then
+		COMPILE_SRC
+	fi
+
+	if [[ "$DEPLOY" ]]
+	then
+		DEPLOY_CLUSTER
+	fi
+
+	if [[ "$SET_NDELAY" ]]
+	then
+		if [[ "$LTS_LOCALE" ]]
+		then
+			sshpass -p ${rootpwd} ssh root@${LTS_LOCALE} "tc qdisc add dev $NI root netem delay ${BASE_DELAY}ms ${FLOAT_DELAY}ms ${PROBE}%"
+		else
+			sshpass -p ${rootpwd} ssh root@localhost "tc qdisc add dev $NI root netem delay ${BASE_DELAY}ms ${FLOAT_DELAY}ms ${PROBE}%"
+		fi
+	fi
+
+	if [[ "$UNSET_NDELAY" ]]
+	then
+		if [[ "$LTS_LOCALE" ]]
+		then
+			sshpass -p ${rootpwd} ssh root@${LTS_LOCALE} "tc qdisc del dev $NI root"
+		else
+			sshpass -p ${rootpwd} ssh root@localhost "tc qdisc del dev $NI root"
+		fi
+	fi
+
+	if [[ "$TEST_ALL" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$RUN_ALL_TESTS" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$RUN_CON_TESTS" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$RUN_HR_TESTS" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$RUN_OCC_TESTS" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$RUN_CW_TESTS" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$TEST_GPDB" ]]
+	then
+		needmkdir=1
+	fi
+
+	if [[ "$TS" ]]
+	then
+		dirtimestamp=${TS}
+		curResult=${RESULT}"/test-"${dirtimestamp}
+	else
+		dirtimestamp=$(date +"%m%d%H%M%S")
+		curResult=${RESULT}"/test-"${dirtimestamp}
+		if [[ "$needmkdir" ]]
+		then
+			mkdir -p ${curResult}
+		fi
+	fi
+
+	if [[ "$NEED_STANDBY" ]]
+	then
+		gpinitstandby -a -s ${STANDBY_LOCALE}
+		ssh ${STANDBY_LOCALE} ". ${gpbin}/greenplum_path.sh; export GPPORT=${PORT}; export PGPORT=${PORT}; export GPDATABASE=${DEFAULTDB}; export PGDATABASE=${DEFAULTDB}; export MASTER_DATA_DIRECTORY=${gpmaster}; gpactivatestandby -a -f"
+		psql -d template1 -c "set gp_role=utility; select catalog_update_standby_info();"
+	fi
+
+	if [[ "$RESTART_CRDB_CLUSTER" ]]
+	then
+		RESTART_CLUSTER_COCKROACHDB
+	fi
+
+	if [[ "$DEPLOY_CRDB_CLUSTER" ]]
+	then
+		DEPLOY_CLUSTER_COCKROACHDB
+	fi
+
+	if [[ "$BUILD_HR_TESTS" ]]
+	then
+		HEAP_ROCKSDB_CREATE 128 64
+	fi
+
+	if [[ "$RUN_HR_TESTS" ]]
+	then
+		HEAP_ROCKSDB 128 64
+	fi
+
+	if [[ "$BUILD_OCC_TESTS" ]]
+	then
+		OCC_CREATE 128 64
+	fi
+
+	if [[ "$RUN_OCC_TESTS" ]]
+	then
+		OCC 128 64
+	fi
+
+	if [[ "$BUILD_CON_TESTS" ]]
+	then
+		CON_CREATE 128 64
+	fi
+
+	if [[ "$RUN_CON_TESTS" ]]
+	then
+		CON 128 64
+	fi
+
+	if [[ "$BUILD_CW_TESTS" ]]
+	then
+		WOOKONGDB_COCKROACH_CREATE
+	fi
+
+	if [[ "$RUN_CW_TESTS" ]]
+	then
+		WOOKONGDB_COCKROACH
+	fi
+
+	if [[ "$DRAW_PICTURE" ]]
+	then
+		if [[ "$testnumber" == "2" ]]
+		then
+			DRAW_TEST_PICTURE2 ${testtype} ${testname1} ${testname2}
+		else
+			DRAW_TEST_PICTURE3 ${testtype} ${testname1} ${testname2} ${testname3}
+		fi
+	fi
+
+	if [[ "$SIZE_TEST" ]]
+	then
+		set +e
+		for sizee in ${SIZE_LIST[@]}
+		do
+			dirtimestamp= $(date +"%m%d%H%M%S")
+			curResult=${RESULT}"/test-"${dirtimestamp}"-"${sizee}
+			mkdir -p ${curResult}
+
+			psql -d ${DEFAULTDB} -c "DROP DATABASE tpcbheap"
+			psql -d ${DEFAULTDB} -c "DROP DATABASE tpcbrocksdb"
+
+			SIZE=${sizee}
+			CREATE_HEAP_DATABASE_FOR_TPCB
+			CREATE_ROCKSDB_DATABASE_FOR_TPCB
+			RUN_PGBENCH_TEST heap tpcb
+			RUN_PGBENCH_TEST rocksdb tpcb
+		done
+		set -e
+	fi
+
+	if [[ "$TEST_GPDB" ]]
+	then
+		RUN_ALL_TEST_ON_GPDB
+
+		DRAW_TEST_PICTURE3 "select" heap rocksdb gpdb
+		DRAW_TEST_PICTURE3 "update" heap rocksdb gpdb
+		DRAW_TEST_PICTURE3 "tpcb" heap rocksdb gpdb
+	fi
+
+	if [[ "$TEST_ALL" ]]
+	then
+		HEAP_ROCKSDB_CREATE
+		HEAP_ROCKSDB
+		OCC_CREATE
+		OCC
+		CON_CREATE
+		CON
+		RUN_ALL_TEST_ON_GPDB
+	fi
+
+	if [[ "$RUN_ALL_TESTS" ]]
+	then
+		set +e
+		COPY_TMP=1
+		FIRST=1
+		MANY_DELAY
+		ALL_TPCB
+		HR_TPCC
+		# CON_MANY_SIZE
+		# OCC_MANY_SIZE
+		# CRDB_TEST
+		# OCC_MANY_SIZE_FORWARD
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# OCC_CREATE 512 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# OCC 512 64
+		# sleep 5
+		set -e
+	fi
+}
+
+main
+
+# test rocksdb, gpdb
+# nohup ./wkdbctl -d y -c y -f y -t y -x -g --set-lts gp-master --hr-build --hr -w 5 -S -U -T 1>/tmp/stdout 2>/tmp/stderr < /dev/null &
+
+{
+		# con tpcb 1ms
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# HTTP0_ADD_DELAY tpccsss 1
+		# HTTP0_ADD_DELAY tpccss 1
+		# HTTP0_ADD_DELAY tpcccrr 1
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# # con tpcb 3ms
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# HTTP0_ADD_DELAY tpccsss 3
+		# HTTP0_ADD_DELAY tpccss 3
+		# HTTP0_ADD_DELAY tpcccrr 3
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# # con tpcb 5ms
+		# export PGDATABASE=penguindb
+		# # DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# HTTP0_ADD_DELAY tpcbsss 5
+		# HTTP0_ADD_DELAY tpcbss 5
+		# HTTP0_ADD_DELAY tpcbcrr 5
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# # con tpcb
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+
+		# heap vs rocksdb pgbench
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# HEAP_ROCKSDB_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# HEAP_ROCKSDB 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=1
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# HEAP_ROCKSDB_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# HEAP_ROCKSDB 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=1
+		# TEST_TPCC=""
+		# HEAP_ROCKSDB_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# HEAP_ROCKSDB 128 64
+		# sleep 5
+
+		# occ tpcb
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=1
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# OCC_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# OCC 128 64
+		# sleep 5
+
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=1
+		# TEST_UPDATE=""
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=1
+		# TEST_TPCC=""
+		# CON_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# HEAP_ROCKSDB_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# HEAP_ROCKSDB 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# OCC_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# OCC 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 128 64
+		# ROLLBACK_COUNT 100000
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 128 64
+		# HTTP0_ADD_DELAY tpccsss 1
+		# HTTP0_ADD_DELAY tpccss 1
+		# HTTP0_ADD_DELAY tpcccrr 1
+		# ROLLBACK_COUNT 100000
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 128 64
+		# HTTP0_ADD_DELAY tpccsss 3
+		# HTTP0_ADD_DELAY tpccss 3
+		# HTTP0_ADD_DELAY tpcccrr 3
+		# ROLLBACK_COUNT 100000
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+
+		# export PGDATABASE=penguindb
+		# # DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 128 128
+		# HTTP0_ADD_DELAY tpccsss 5
+		# HTTP0_ADD_DELAY tpccss 5
+		# HTTP0_ADD_DELAY tpcccrr 5
+		# ROLLBACK_COUNT 100000
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 256 128
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 256 128
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# CON_CREATE 512 256
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# CON 512 256
+		# sleep 5
+
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# OCC_CREATE 128 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# OCC 128 64
+		# sleep 5
+		# export PGDATABASE=penguindb
+		# DEPLOY_CLUSTER
+		# TEST_TPCB=""
+		# TEST_SELECT=""
+		# TEST_UPDATE=""
+		# TEST_TPCC=1
+		# OCC_CREATE 256 64
+		# dirtimestamp=$(date +"%m%d%H%M%S")
+		# curResult=${RESULT}"/test-"${dirtimestamp}
+		# mkdir -p ${curResult}
+		# OCC 256 64
+		# sleep 5
+}
